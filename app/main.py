@@ -4,6 +4,7 @@ import os
 import logging
 import secrets
 import html
+import json
 from pathlib import Path
 from threading import Event, Lock, Thread
 from datetime import datetime, timezone
@@ -87,6 +88,17 @@ dashboard_state = DashboardState()
 STARTED_GAME_CACHE_TTL_SECONDS = 120
 _started_game_cache: dict[int, tuple[float, bool]] = {}
 _started_game_cache_lock = Lock()
+
+FINAL_GAME_CACHE_TTL_SECONDS = 120
+_final_game_cache: dict[int, tuple[float, bool]] = {}
+_final_game_cache_lock = Lock()
+
+_rank_adjustments_lock = Lock()
+_rank_adjustments_cache: dict[str, dict[str, float] | dict[str, object]] | None = None
+_rank_adjustments_last_source_mtime: float | None = None
+_rank_adjustments_last_slate_complete: bool = False
+_rank_adjustments_last_reason: str = "never"
+_rank_adjustments_last_refreshed_at: str | None = None
 
 GAMBLY_REDIRECT_TTL_SECONDS = 3600
 _gambly_redirect_cache: dict[str, tuple[float, str]] = {}
@@ -748,6 +760,12 @@ def _load_hermes_adjustments() -> dict:
 
 
 def _dashboard_rank_adjustments() -> dict[str, dict[str, float] | dict[str, object]]:
+    global _rank_adjustments_cache
+    global _rank_adjustments_last_source_mtime
+    global _rank_adjustments_last_slate_complete
+    global _rank_adjustments_last_reason
+    global _rank_adjustments_last_refreshed_at
+
     category_defaults = {
         "hr": 1.0,
         "hits": 1.0,
@@ -764,6 +782,44 @@ def _dashboard_rank_adjustments() -> dict[str, dict[str, float] | dict[str, obje
         "safe": 1.0,
         "contrarian": 1.0,
     }
+
+    source_mtime = _dashboard_source_csv_mtime()
+    slate_complete = False
+    try:
+        csv_path = _dashboard_source_csv_path()
+        if csv_path.exists():
+            slate_df = load_slate_from_csv(str(csv_path))
+            slate_complete = _slate_is_complete(slate_df)
+    except Exception:
+        slate_complete = False
+
+    reasons: list[str] = []
+    with _rank_adjustments_lock:
+        if _rank_adjustments_cache is None:
+            reasons.append("initial_load")
+        if (
+            source_mtime is not None
+            and _rank_adjustments_last_source_mtime is not None
+            and source_mtime > _rank_adjustments_last_source_mtime
+        ):
+            reasons.append("new_lineups")
+        if slate_complete and not _rank_adjustments_last_slate_complete:
+            reasons.append("games_complete")
+
+        should_refresh = bool(reasons)
+        if not should_refresh and _rank_adjustments_cache is not None:
+            frozen = {
+                "categories": dict(_rank_adjustments_cache.get("categories", {})),
+                "subcategories": dict(_rank_adjustments_cache.get("subcategories", {})),
+                "meta": dict(_rank_adjustments_cache.get("meta", {})),
+            }
+            frozen_meta = dict(frozen.get("meta", {}))
+            frozen_meta["learning_update_policy"] = "refresh_on_games_complete_or_new_lineups"
+            frozen_meta["weights_refresh_skipped"] = True
+            frozen_meta["last_refresh_reason"] = _rank_adjustments_last_reason
+            frozen_meta["weights_last_refreshed_at"] = _rank_adjustments_last_refreshed_at
+            frozen["meta"] = frozen_meta
+            return frozen
 
     learning_payload: dict[str, object] = {}
     try:
@@ -838,14 +894,30 @@ def _dashboard_rank_adjustments() -> dict[str, dict[str, float] | dict[str, obje
             except Exception:
                 pass
 
-    return {
+    result = {
         "categories": category_weights,
         "subcategories": subcategory_weights,
         "meta": {
             "learning_enabled": bool(learning_payload),
             "hermes_loaded": bool(adjustments),
+            "learning_update_policy": "refresh_on_games_complete_or_new_lineups",
+            "weights_refresh_skipped": False,
         },
     }
+
+    with _rank_adjustments_lock:
+        _rank_adjustments_cache = result
+        _rank_adjustments_last_source_mtime = source_mtime
+        _rank_adjustments_last_slate_complete = slate_complete
+        _rank_adjustments_last_reason = ",".join(reasons) if reasons else "forced"
+        _rank_adjustments_last_refreshed_at = datetime.now(tz=timezone.utc).isoformat()
+
+        result_meta = dict(result.get("meta", {}))
+        result_meta["last_refresh_reason"] = _rank_adjustments_last_reason
+        result_meta["weights_last_refreshed_at"] = _rank_adjustments_last_refreshed_at
+        result["meta"] = result_meta
+
+    return result
 
 
 def _clamp_float(value: float, lower: float, upper: float) -> float:
@@ -1010,6 +1082,61 @@ def _game_has_started(game_id: int) -> bool:
         _started_game_cache[game_id] = (now_ts, started)
 
     return started
+
+
+def _game_is_final(game_id: int) -> bool:
+    if game_id <= 0:
+        return False
+
+    now_ts = time.time()
+    with _final_game_cache_lock:
+        cached = _final_game_cache.get(game_id)
+        if cached and (now_ts - cached[0]) <= FINAL_GAME_CACHE_TTL_SECONDS:
+            return bool(cached[1])
+
+    is_final = False
+    try:
+        url = f"https://statsapi.mlb.com/api/v1.1/game/{game_id}/feed/live"
+        response = requests.get(url, timeout=3)
+        response.raise_for_status()
+        payload = response.json()
+        status = payload.get("gameData", {}).get("status", {}) if isinstance(payload, dict) else {}
+        abstract_code = str(status.get("abstractGameCode", "")).strip().upper()
+        abstract_state = str(status.get("abstractGameState", "")).strip().lower()
+        detailed_state = str(status.get("detailedState", "")).strip().lower()
+
+        if abstract_code == "F":
+            is_final = True
+        elif abstract_state == "final":
+            is_final = True
+        elif detailed_state in {"final", "game over", "completed early"}:
+            is_final = True
+    except Exception:
+        is_final = False
+
+    with _final_game_cache_lock:
+        _final_game_cache[game_id] = (now_ts, is_final)
+
+    return is_final
+
+
+def _slate_is_complete(df) -> bool:
+    if "game_id" not in df.columns:
+        return False
+
+    game_ids: set[int] = set()
+    for raw in df["game_id"].dropna().tolist():
+        try:
+            game_id = int(raw)
+        except Exception:
+            continue
+        if game_id > 0:
+            game_ids.add(game_id)
+
+    if not game_ids:
+        return False
+
+    return all(_game_is_final(game_id) for game_id in game_ids)
 
 
 def _exclude_started_games(df):

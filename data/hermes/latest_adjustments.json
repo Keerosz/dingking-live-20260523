@@ -1,0 +1,23 @@
+{
+  "version": "2026-05-23-live",
+  "source": "hermez",
+  "adjustments": {
+    "category_weight_deltas": {},
+    "subcategory_weight_deltas": {},
+    "mode_weights": {
+      "balanced": 1.0,
+      "cream": 1.0,
+      "extreme-cream": 1.0,
+      "chalk-city": 1.0,
+      "hits": 1.0,
+      "hits-tb-combo": 1.0
+    },
+    "risk_weights": {
+      "safe": 1.0,
+      "balanced": 1.0,
+      "yolo": 1.0
+    },
+    "archetype_weight_deltas": {},
+    "notes": "No-op baseline so Hermez is active in production and ready for live deltas."
+  }
+}
