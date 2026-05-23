@@ -1,0 +1,8 @@
+tunnel: ec9ebe5a-9ed0-4fe0-b481-a3cbec7a6db5
+credentials-file: C:\Users\Spann\.cloudflared\ec9ebe5a-9ed0-4fe0-b481-a3cbec7a6db5.json
+ingress:
+  - hostname: app.dingking.bet
+    service: http://localhost:8000
+  - hostname: phone.dingking.bet
+    service: http://localhost:8000
+  - service: http_status:404

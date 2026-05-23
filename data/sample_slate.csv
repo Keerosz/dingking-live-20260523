@@ -1,0 +1,45 @@
+player_name,team,bats,lineup_slot,recent_hr_form,hard_hit_pct,barrel_pct,pull_pct,fly_ball_pct,iso,hr_pa,recent_hits,recent_hr_streak,pitcher_name,pitcher_hand,hr_allowed,opp_fly_ball_tendency,pitcher_split_weakness,hard_contact_allowed,barrel_rate_allowed,pitcher_fatigue,bullpen_quality,wind_speed,wind_direction,temperature,humidity,air_density,park_name,park_hr_factor,park_lhb_boost,park_rhb_boost,short_porch,dome,implied_total,moneyline,projected_ownership,leverage_score_seed,start_time_bucket,game_id
+Aaron Judge,NYY,R,2,0.92,57,22,48,46,0.36,0.081,9,2,Dean Kremer,R,24,0.42,RHB,0.44,0.09,0.33,0.49,12,out,77,52,0.96,Yankee Stadium,1.19,1.10,1.18,1,0,5.4,-160,0.31,0.34,early,NYY@BAL
+Juan Soto,NYY,L,3,0.86,53,19,42,40,0.32,0.074,10,1,Dean Kremer,R,24,0.42,LHB,0.44,0.09,0.33,0.49,12,out,77,52,0.96,Yankee Stadium,1.19,1.10,1.18,1,0,5.4,-160,0.29,0.38,early,NYY@BAL
+Adley Rutschman,BAL,S,2,0.55,44,11,38,36,0.21,0.045,8,0,Gerrit Cole,R,17,0.34,LHB,0.31,0.06,0.24,0.63,11,out,77,52,0.96,Yankee Stadium,1.19,1.10,1.18,1,0,4.1,140,0.12,0.62,early,NYY@BAL
+Gunnar Henderson,BAL,L,1,0.72,49,15,45,44,0.28,0.058,10,1,Gerrit Cole,R,17,0.34,LHB,0.31,0.06,0.24,0.63,11,out,77,52,0.96,Yankee Stadium,1.19,1.10,1.18,1,0,4.1,140,0.18,0.57,early,NYY@BAL
+Kyle Schwarber,PHI,L,1,0.88,51,20,47,52,0.35,0.079,7,1,Reese Olson,R,20,0.38,LHB,0.39,0.08,0.29,0.52,16,out,84,58,0.93,Citizens Bank Park,1.13,1.14,1.06,0,0,5.0,-135,0.27,0.43,mid,PHI@DET
+Bryce Harper,PHI,L,3,0.79,50,17,40,43,0.30,0.066,9,1,Reese Olson,R,20,0.38,LHB,0.39,0.08,0.29,0.52,16,out,84,58,0.93,Citizens Bank Park,1.13,1.14,1.06,0,0,5.0,-135,0.25,0.45,mid,PHI@DET
+Riley Greene,DET,L,2,0.63,45,12,40,39,0.24,0.049,11,0,Zack Wheeler,R,15,0.31,LHB,0.29,0.05,0.18,0.67,16,out,84,58,0.93,Citizens Bank Park,1.13,1.14,1.06,0,0,4.2,120,0.10,0.61,mid,PHI@DET
+Spencer Torkelson,DET,R,4,0.60,46,13,43,44,0.25,0.053,8,0,Zack Wheeler,R,15,0.31,RHB,0.29,0.05,0.18,0.67,16,out,84,58,0.93,Citizens Bank Park,1.13,1.14,1.06,0,0,4.2,120,0.08,0.66,mid,PHI@DET
+Shohei Ohtani,LAD,L,2,0.94,58,23,41,45,0.37,0.085,12,3,Logan Webb,R,13,0.33,LHB,0.28,0.05,0.21,0.62,8,in,68,61,1.01,Dodger Stadium,1.02,1.03,1.01,0,0,4.8,-145,0.35,0.27,late,LAD@SF
+Mookie Betts,LAD,R,1,0.74,47,14,37,35,0.26,0.052,10,1,Logan Webb,R,13,0.33,RHB,0.28,0.05,0.21,0.62,8,in,68,61,1.01,Dodger Stadium,1.02,1.03,1.01,0,0,4.8,-145,0.22,0.49,late,LAD@SF
+Matt Chapman,SF,R,4,0.66,48,15,46,44,0.27,0.057,9,1,Yoshinobu Yamamoto,R,14,0.30,RHB,0.30,0.06,0.20,0.66,8,in,68,61,1.01,Dodger Stadium,1.02,1.03,1.01,0,0,4.0,125,0.09,0.64,late,LAD@SF
+Mike Yastrzemski,SF,L,6,0.52,42,11,44,41,0.22,0.046,7,0,Yoshinobu Yamamoto,R,14,0.30,LHB,0.30,0.06,0.20,0.66,8,in,68,61,1.01,Dodger Stadium,1.02,1.03,1.01,0,0,4.0,125,0.06,0.71,late,LAD@SF
+Yordan Alvarez,HOU,L,3,0.83,54,18,42,43,0.31,0.069,9,1,Kutter Crawford,R,22,0.40,LHB,0.36,0.08,0.35,0.47,13,out,82,56,0.95,Minute Maid Park,1.08,1.09,1.06,0,1,4.9,-118,0.24,0.46,mid,HOU@BOS
+Kyle Tucker,HOU,L,2,0.81,52,17,41,41,0.30,0.066,11,1,Kutter Crawford,R,22,0.40,LHB,0.36,0.08,0.35,0.47,13,out,82,56,0.95,Minute Maid Park,1.08,1.09,1.06,0,1,4.9,-118,0.21,0.50,mid,HOU@BOS
+Rafael Devers,BOS,L,3,0.77,50,16,39,40,0.29,0.063,8,1,Framber Valdez,L,16,0.35,RHB,0.33,0.06,0.26,0.60,13,out,82,56,0.95,Minute Maid Park,1.08,1.09,1.06,0,1,4.7,102,0.19,0.52,mid,HOU@BOS
+Triston Casas,BOS,L,4,0.59,45,13,43,42,0.25,0.055,6,0,Framber Valdez,L,16,0.35,RHB,0.33,0.06,0.26,0.60,13,out,82,56,0.95,Minute Maid Park,1.08,1.09,1.06,0,1,4.7,102,0.11,0.63,mid,HOU@BOS
+Julio Rodriguez,SEA,R,2,0.70,49,14,42,40,0.27,0.059,10,1,Tarik Skubal,L,14,0.30,RHB,0.29,0.05,0.22,0.65,9,neutral,64,49,1.00,T-Mobile Park,0.95,0.96,0.95,0,1,4.3,110,0.15,0.58,late,SEA@DET2
+Cal Raleigh,SEA,S,5,0.64,47,16,48,46,0.29,0.062,8,1,Tarik Skubal,L,14,0.30,RHB,0.29,0.05,0.22,0.65,9,neutral,64,49,1.00,T-Mobile Park,0.95,0.96,0.95,0,1,4.3,110,0.09,0.67,late,SEA@DET2
+Jose Ramirez,CLE,S,3,0.78,51,17,46,43,0.30,0.067,11,2,Bailey Ober,R,19,0.37,LHB,0.35,0.07,0.28,0.54,10,cold,72,44,0.99,Progressive Field,1.04,1.05,1.03,0,0,4.6,-105,0.20,0.51,early,CLE@MIN
+Josh Naylor,CLE,L,4,0.69,48,14,44,41,0.27,0.059,9,1,Bailey Ober,R,19,0.37,LHB,0.35,0.07,0.28,0.54,10,cold,72,44,0.99,Progressive Field,1.04,1.05,1.03,0,0,4.6,-105,0.14,0.60,early,CLE@MIN
+Byron Buxton,MIN,R,2,0.61,46,15,47,45,0.26,0.056,7,1,Tanner Bibee,R,18,0.34,RHB,0.34,0.07,0.27,0.57,10,cold,72,44,0.99,Progressive Field,1.04,1.05,1.03,0,0,4.4,-102,0.10,0.65,early,CLE@MIN
+Carlos Correa,MIN,R,3,0.57,43,11,41,39,0.23,0.049,8,0,Tanner Bibee,R,18,0.34,RHB,0.34,0.07,0.27,0.57,10,cold,72,44,0.99,Progressive Field,1.04,1.05,1.03,0,0,4.4,-102,0.08,0.70,early,CLE@MIN
+Fernando Tatis Jr,SD,R,1,0.75,50,16,44,42,0.29,0.064,10,1,Patrick Corbin,L,23,0.41,RHB,0.40,0.08,0.34,0.45,14,out,86,57,0.92,Petco Park,0.98,0.97,1.00,0,0,4.7,-122,0.18,0.53,late,SD@WSH
+Manny Machado,SD,R,3,0.68,48,14,42,40,0.26,0.058,9,1,Patrick Corbin,L,23,0.41,RHB,0.40,0.08,0.34,0.45,14,out,86,57,0.92,Petco Park,0.98,0.97,1.00,0,0,4.7,-122,0.16,0.56,late,SD@WSH
+Luis Arraez,SD,L,2,0.34,33,4,29,24,0.12,0.018,13,0,Patrick Corbin,L,23,0.41,LHB,0.40,0.08,0.34,0.45,14,out,86,57,0.92,Petco Park,0.98,0.97,1.00,0,0,4.7,-122,0.05,0.79,late,SD@WSH
+CJ Abrams,WSH,L,1,0.58,42,10,38,37,0.22,0.047,10,0,Dylan Cease,R,16,0.33,LHB,0.32,0.06,0.25,0.59,14,out,86,57,0.92,Petco Park,0.98,0.97,1.00,0,0,4.1,108,0.07,0.74,late,SD@WSH
+Joey Gallo,WSH,L,5,0.62,49,18,52,50,0.31,0.065,5,1,Dylan Cease,R,16,0.33,LHB,0.32,0.06,0.25,0.59,14,out,86,57,0.92,Petco Park,0.98,0.97,1.00,0,0,4.1,108,0.04,0.83,late,SD@WSH
+Pete Alonso,NYM,R,4,0.80,53,19,48,47,0.33,0.073,9,2,MacKenzie Gore,L,19,0.37,RHB,0.36,0.07,0.28,0.53,12,neutral,79,50,0.97,Citi Field,0.97,0.95,0.99,0,0,4.5,-110,0.22,0.49,mid,NYM@WSH2
+Francisco Lindor,NYM,S,2,0.67,47,13,39,36,0.24,0.053,11,1,MacKenzie Gore,L,19,0.37,RHB,0.36,0.07,0.28,0.53,12,neutral,79,50,0.97,Citi Field,0.97,0.95,0.99,0,0,4.5,-110,0.17,0.55,mid,NYM@WSH2
+Brandon Nimmo,NYM,L,1,0.49,41,9,35,34,0.19,0.041,10,0,MacKenzie Gore,L,19,0.37,LHB,0.36,0.07,0.28,0.53,12,neutral,79,50,0.97,Citi Field,0.97,0.95,0.99,0,0,4.5,-110,0.09,0.69,mid,NYM@WSH2
+Vladimir Guerrero Jr,TOR,R,3,0.76,52,17,43,42,0.30,0.066,12,1,JP Sears,L,21,0.39,RHB,0.37,0.08,0.31,0.50,15,out,88,54,0.91,Rogers Centre,1.11,1.08,1.12,0,1,5.1,-132,0.23,0.47,early,TOR@OAK
+Bo Bichette,TOR,R,2,0.62,46,11,40,35,0.22,0.046,13,0,JP Sears,L,21,0.39,RHB,0.37,0.08,0.31,0.50,15,out,88,54,0.91,Rogers Centre,1.11,1.08,1.12,0,1,5.1,-132,0.14,0.59,early,TOR@OAK
+Daulton Varsho,TOR,L,5,0.60,47,14,45,44,0.26,0.057,8,1,JP Sears,L,21,0.39,LHB,0.37,0.08,0.31,0.50,15,out,88,54,0.91,Rogers Centre,1.11,1.08,1.12,0,1,5.1,-132,0.11,0.63,early,TOR@OAK
+Brent Rooker,OAK,R,3,0.71,50,16,47,46,0.29,0.063,9,1,Jose Berrios,R,18,0.36,RHB,0.35,0.07,0.27,0.55,15,out,88,54,0.91,Rogers Centre,1.11,1.08,1.12,0,1,4.3,118,0.09,0.68,early,TOR@OAK
+Joc Pederson,AZ,L,4,0.65,48,15,46,45,0.28,0.060,8,1,Graham Ashcraft,R,22,0.39,LHB,0.37,0.08,0.30,0.51,17,out,89,60,0.90,Chase Field,1.09,1.10,1.06,0,1,5.0,-125,0.12,0.60,late,AZ@CIN
+Christian Walker,AZ,R,3,0.74,51,17,45,43,0.30,0.067,10,1,Graham Ashcraft,R,22,0.39,RHB,0.37,0.08,0.30,0.51,17,out,89,60,0.90,Chase Field,1.09,1.10,1.06,0,1,5.0,-125,0.17,0.53,late,AZ@CIN
+Elly De La Cruz,CIN,S,1,0.73,50,14,43,41,0.28,0.061,12,1,Zac Gallen,R,17,0.34,LHB,0.33,0.07,0.25,0.58,17,out,89,60,0.90,Chase Field,1.09,1.10,1.06,0,1,4.6,106,0.20,0.52,late,AZ@CIN
+Spencer Steer,CIN,R,4,0.58,44,10,38,36,0.22,0.047,9,0,Zac Gallen,R,17,0.34,RHB,0.33,0.07,0.25,0.58,17,out,89,60,0.90,Chase Field,1.09,1.10,1.06,0,1,4.6,106,0.08,0.71,late,AZ@CIN
+Will Smith,LAD,R,4,0.62,45,13,41,39,0.24,0.052,10,1,Logan Webb,R,13,0.33,RHB,0.28,0.05,0.21,0.62,8,in,68,61,1.01,Dodger Stadium,1.02,1.03,1.01,0,0,4.8,-145,0.13,0.57,late,LAD@SF
+Caleb Joseph,BAL,R,8,0.38,37,8,39,35,0.17,0.036,6,0,Gerrit Cole,R,17,0.34,RHB,0.31,0.06,0.24,0.63,11,out,77,52,0.96,Yankee Stadium,1.19,1.10,1.18,1,0,4.1,140,0.02,0.89,early,NYY@BAL
+Jose Trevino,NYY,R,8,0.41,39,9,38,34,0.18,0.039,7,0,Dean Kremer,R,24,0.42,RHB,0.44,0.09,0.33,0.49,12,out,77,52,0.96,Yankee Stadium,1.19,1.10,1.18,1,0,5.4,-160,0.03,0.86,early,NYY@BAL
+Yan Gomes,CHC,R,8,0.43,40,10,41,36,0.19,0.041,6,0,Joey Estes,R,25,0.43,RHB,0.42,0.09,0.36,0.46,18,out,87,63,0.89,Wrigley Field,1.15,1.12,1.18,0,0,4.9,-121,0.03,0.84,mid,CHC@OAK2
+Seiya Suzuki,CHC,R,2,0.66,48,14,44,42,0.27,0.059,10,1,Joey Estes,R,25,0.43,RHB,0.42,0.09,0.36,0.46,18,out,87,63,0.89,Wrigley Field,1.15,1.12,1.18,0,0,4.9,-121,0.16,0.56,mid,CHC@OAK2
+Christopher Morel,CHC,R,4,0.64,49,15,47,45,0.28,0.061,9,1,Joey Estes,R,25,0.43,RHB,0.42,0.09,0.36,0.46,18,out,87,63,0.89,Wrigley Field,1.15,1.12,1.18,0,0,4.9,-121,0.12,0.62,mid,CHC@OAK2

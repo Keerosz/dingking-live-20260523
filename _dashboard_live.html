@@ -1,0 +1,418 @@
+﻿
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#b3472e" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="manifest" href="/dashboard/app-manifest.json" />
+    <link rel="icon" href="/dashboard/icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/dashboard/icon.svg" />
+    <title>DINGKING Dashboard</title>
+    <style>
+        :root {
+            --bg: #f7f4ef;
+            --ink: #1e2a2f;
+            --accent: #b3472e;
+            --accent-2: #1f6e5f;
+            --panel: #fffdfa;
+            --line: #e5d8c5;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            color: var(--ink);
+            background: radial-gradient(circle at 10% 0%, #fff8e8 0%, var(--bg) 45%), linear-gradient(180deg, #f0e8da 0%, var(--bg) 100%);
+            font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+        }
+        .wrap {
+            width: min(1280px, 94vw);
+            margin: 0 auto;
+            padding: 28px 0 40px;
+        }
+        h1 {
+            margin: 0;
+            font-size: clamp(26px, 3vw, 40px);
+            letter-spacing: 1px;
+        }
+        .sub {
+            opacity: 0.8;
+            margin: 6px 0 18px;
+        }
+        .toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 14px;
+        }
+        button {
+            border: 0;
+            padding: 12px 16px;
+            border-radius: 12px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: transform 120ms ease;
+        }
+        button:hover { transform: translateY(-1px); }
+        .btn-all { background: var(--accent); color: #fff; }
+        .btn-one { background: var(--accent-2); color: #fff; }
+        .meta {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 14px;
+            padding: 12px;
+            margin-bottom: 14px;
+            font-size: 14px;
+        }
+        .status { font-weight: 700; margin-bottom: 6px; }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(245px, 1fr));
+            gap: 10px;
+        }
+        .card {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            padding: 10px;
+            animation: pop 180ms ease;
+        }
+        .card h3 {
+            margin: 0 0 8px;
+            font-size: 14px;
+        }
+        .story {
+            font-size: 12px;
+            opacity: 0.8;
+            margin-bottom: 8px;
+            min-height: 34px;
+        }
+        .leg {
+            font-size: 12px;
+            padding: 7px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            margin-bottom: 6px;
+            background: #fff;
+            line-height: 1.3;
+        }
+        .portal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(15, 18, 20, 0.55);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            z-index: 40;
+        }
+        .portal-overlay.show {
+            display: flex;
+        }
+        .portal-modal {
+            width: min(460px, 92vw);
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            padding: 16px;
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.28);
+        }
+        .portal-title {
+            margin: 0 0 6px;
+            font-size: 18px;
+            font-weight: 800;
+        }
+        .portal-copy {
+            margin: 0 0 12px;
+            opacity: 0.82;
+            font-size: 13px;
+            line-height: 1.4;
+        }
+        .portal-actions {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 8px;
+        }
+        .portal-close {
+            margin-top: 10px;
+            width: 100%;
+            background: #e9ddcb;
+            color: #4b453c;
+        }
+        @keyframes pop {
+            from { transform: scale(0.98); opacity: 0.6; }
+            to { transform: scale(1); opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+    <main class="wrap">
+        <h1>DINGKING</h1>
+        <div class="sub">20 Parlays with 1-9 legs. Send slips to your sportsbook portal with one tap.</div>
+        <div class="toolbar">
+            <button class="btn-all" id="btnAll">Generate All 20</button>
+            <button class="btn-one" id="btnOne">Generate 1 New</button>
+            <button class="btn-one" id="btnCopyAll">Sportsbook Portal (All)</button>
+            <button class="btn-one" id="btnInstall" style="display:none;">Install App</button>
+            <label style="display:flex;align-items:center;gap:6px;font-size:14px;font-weight:700;">
+                Legs
+                <select id="legsSel" style="padding:12px;border-radius:12px;border:1px solid var(--line);font-weight:700;">
+                    <option value="1">1</option>
+                    <option value="2">2</option>
+                    <option value="3">3</option>
+                    <option value="4" selected>4</option>
+                    <option value="5">5</option>
+                    <option value="6">6</option>
+                    <option value="7">7</option>
+                    <option value="8">8</option>
+                    <option value="9">9</option>
+                </select>
+            </label>
+            <select id="modeSel" style="padding:12px;border-radius:12px;border:1px solid var(--line);font-weight:700;">
+                <option value="balanced">Balanced</option>
+                <option value="cream">Cream</option>
+                <option value="extreme-cream">Extreme Cream</option>
+            </select>
+        </div>
+        <section class="meta">
+            <div class="status" id="statusText">Loading...</div>
+            <div id="metaText"></div>
+        </section>
+        <section class="grid" id="cards"></section>
+    </main>
+
+    <div class="portal-overlay" id="portalOverlay" role="dialog" aria-modal="true" aria-labelledby="portalTitle">
+        <div class="portal-modal">
+            <h2 class="portal-title" id="portalTitle">Open Sportsbook</h2>
+            <p class="portal-copy" id="portalText">Choose a sportsbook. DINGKING will copy your slip text, then open that book.</p>
+            <div class="portal-actions">
+                <button class="btn-all" id="portalFanduel">Open FanDuel</button>
+                <button class="btn-one" id="portalDraftkings">Open DraftKings</button>
+            </div>
+            <button class="portal-close" id="portalClose">Cancel</button>
+        </div>
+    </div>
+
+    <script>
+        const statusText = document.getElementById('statusText');
+        const metaText = document.getElementById('metaText');
+        const cards = document.getElementById('cards');
+        const modeSel = document.getElementById('modeSel');
+        const legsSel = document.getElementById('legsSel');
+        const installBtn = document.getElementById('btnInstall');
+        const copyAllBtn = document.getElementById('btnCopyAll');
+        const portalOverlay = document.getElementById('portalOverlay');
+        const portalText = document.getElementById('portalText');
+        const portalFanduel = document.getElementById('portalFanduel');
+        const portalDraftkings = document.getElementById('portalDraftkings');
+        const portalClose = document.getElementById('portalClose');
+        let deferredInstallPrompt = null;
+        let portalPayload = null;
+        window.__lastParlays = [];
+
+        const SPORTSBOOKS = {
+            fanduel: {
+                label: 'FanDuel',
+                url: 'https://sportsbook.fanduel.com/'
+            },
+            draftkings: {
+                label: 'DraftKings',
+                url: 'https://sportsbook.draftkings.com/'
+            }
+        };
+
+        function sportsbookSlipText(slip, idx) {
+            const lines = [];
+            lines.push(`#${idx + 1} ${String(slip.archetype || '').trim()}`);
+            (slip.legs || []).forEach((leg) => {
+                lines.push(`${String(leg.player_name || '').trim()} (${String(leg.team || '').trim()}) - To Hit a Home Run`);
+            });
+            return lines.join('\n');
+        }
+
+        async function copyText(text, successMsg) {
+            try {
+                await navigator.clipboard.writeText(text);
+                statusText.textContent = successMsg;
+            } catch {
+                statusText.textContent = 'Copy failed. Your browser blocked clipboard access.';
+            }
+        }
+
+        function esc(s) {
+            return String(s ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+        }
+
+        function openSportsbookTarget(bookKey) {
+            const book = SPORTSBOOKS[bookKey];
+            if (!book) return;
+            window.open(book.url, '_blank', 'noopener,noreferrer');
+        }
+
+        function showPortal(payload) {
+            portalPayload = payload;
+            portalText.textContent = payload?.all
+                ? 'Choose FanDuel or DraftKings. DINGKING will copy all slips, then open the sportsbook.'
+                : `Choose FanDuel or DraftKings. DINGKING will copy slip #${(payload?.idx ?? 0) + 1}, then open the sportsbook.`;
+            portalOverlay.classList.add('show');
+        }
+
+        function hidePortal() {
+            portalOverlay.classList.remove('show');
+            portalPayload = null;
+        }
+
+        async function submitPortal(bookKey) {
+            if (!portalPayload) return;
+            const book = SPORTSBOOKS[bookKey];
+            if (!book) return;
+
+            if (portalPayload.all) {
+                const text = Array.from(cards.querySelectorAll('.card')).map((_, i) => sportsbookSlipText(window.__lastParlays?.[i] || {}, i)).join('
+
+');
+                if (!text.trim()) {
+                    statusText.textContent = 'Generate slips first.';
+                    hidePortal();
+                    return;
+                }
+                await copyText(text, `Copied all slips. Opening ${book.label}.`);
+                openSportsbookTarget(bookKey);
+                hidePortal();
+                return;
+            }
+
+            const text = sportsbookSlipText(portalPayload.slip || {}, portalPayload.idx || 0);
+            await copyText(text, `Copied slip #${(portalPayload.idx || 0) + 1}. Opening ${book.label}.`);
+            openSportsbookTarget(bookKey);
+            hidePortal();
+        }
+
+        function renderParlays(parlays) {
+            window.__lastParlays = Array.isArray(parlays) ? parlays : [];
+            cards.innerHTML = '';
+            parlays.forEach((slip, idx) => {
+                const legsHtml = (slip.legs || []).map((leg, li) => `<div class="leg"><strong>Leg ${li + 1}:</strong> ${esc(leg.player_name)} | ${esc(leg.team)} | ${esc(leg.park_name)}</div>`).join('');
+                const el = document.createElement('article');
+                el.className = 'card';
+                el.dataset.index = String(idx);
+                el.innerHTML = `
+                    <h3>#${idx + 1} ${esc(slip.archetype || '')}</h3>
+                    <div class="story">${esc(slip.story || '')}</div>
+                    ${legsHtml}
+                `;
+                const copyBtn = document.createElement('button');
+                copyBtn.className = 'btn-one';
+                copyBtn.textContent = 'Sportsbook Portal';
+                copyBtn.style.width = '100%';
+                copyBtn.style.marginTop = '6px';
+                copyBtn.addEventListener('click', () => showPortal({ all: false, slip, idx }));
+                el.appendChild(copyBtn);
+                cards.appendChild(el);
+            });
+        }
+
+        async function loadState() {
+            const res = await fetch('/dashboard/state');
+            const data = await res.json();
+            if (data.status === 'empty') {
+                statusText.textContent = 'No active dashboard batch. Click "Generate All 20".';
+                metaText.textContent = 'Source: ' + data.source_csv;
+                cards.innerHTML = '';
+                return;
+            }
+            if (data.mode) {
+                modeSel.value = data.mode;
+            }
+            if (data.legs_per_slip) {
+                legsSel.value = String(data.legs_per_slip);
+            }
+            statusText.textContent = `Ready: ${data.count} parlays (${data.legs_per_slip} legs each)`;
+            metaText.textContent = `Mode ${String(modeSel.value).toUpperCase()} | Run ${data.latest_run_id} | Generated ${data.generated_at}`;
+            renderParlays(data.parlays);
+        }
+
+        async function generateAll() {
+            statusText.textContent = 'Generating all 20...';
+            const mode = modeSel.value || 'balanced';
+            const legs = Number(legsSel.value || '4');
+            const res = await fetch('/dashboard/generate-all?mode=' + encodeURIComponent(mode) + '&legs_per_slip=' + encodeURIComponent(String(legs)), { method: 'POST' });
+            const data = await res.json();
+            if (!res.ok) {
+                statusText.textContent = data.detail || 'Failed to generate all 20.';
+                return;
+            }
+            statusText.textContent = `Generated ${data.count} parlays (${data.legs_per_slip} legs each).`;
+            metaText.textContent = `Mode ${String(data.mode || mode).toUpperCase()} | Run ${data.latest_run_id} | Generated ${data.generated_at}`;
+            renderParlays(data.parlays);
+        }
+
+        async function generateOne() {
+            statusText.textContent = 'Generating one new parlay...';
+            const mode = modeSel.value || 'balanced';
+            const legs = Number(legsSel.value || '4');
+            const res = await fetch('/dashboard/generate-one?mode=' + encodeURIComponent(mode) + '&legs_per_slip=' + encodeURIComponent(String(legs)), { method: 'POST' });
+            const data = await res.json();
+            if (!res.ok) {
+                statusText.textContent = data.detail || 'Failed to generate one parlay.';
+                return;
+            }
+            statusText.textContent = `Replaced slot #${data.replaced_slot + 1}.`;
+            metaText.textContent = `Mode ${String(data.mode || mode).toUpperCase()} | Run ${data.latest_run_id} | Generated ${data.generated_at}`;
+
+            const card = cards.querySelector(`[data-index="${data.replaced_slot}"]`);
+            const slip = data.parlay;
+            const legsHtml = (slip.legs || []).map((leg, li) => `<div class="leg"><strong>Leg ${li + 1}:</strong> ${esc(leg.player_name)} | ${esc(leg.team)} | ${esc(leg.park_name)}</div>`).join('');
+            const html = `
+                <h3>#${data.replaced_slot + 1} ${esc(slip.archetype || '')}</h3>
+                <div class="story">${esc(slip.story || '')}</div>
+                ${legsHtml}
+            `;
+            if (card) {
+                card.innerHTML = html;
+                window.__lastParlays[data.replaced_slot] = slip;
+            } else {
+                loadState();
+            }
+        }
+
+        document.getElementById('btnAll').addEventListener('click', generateAll);
+        document.getElementById('btnOne').addEventListener('click', generateOne);
+        copyAllBtn.addEventListener('click', () => showPortal({ all: true }));
+        portalClose.addEventListener('click', hidePortal);
+        portalOverlay.addEventListener('click', (event) => {
+            if (event.target === portalOverlay) hidePortal();
+        });
+        portalFanduel.addEventListener('click', () => submitPortal('fanduel'));
+        portalDraftkings.addEventListener('click', () => submitPortal('draftkings'));
+
+                window.addEventListener('beforeinstallprompt', (event) => {
+                        event.preventDefault();
+                        deferredInstallPrompt = event;
+                        installBtn.style.display = 'inline-block';
+                });
+
+                installBtn.addEventListener('click', async () => {
+                        if (!deferredInstallPrompt) {
+                                statusText.textContent = 'Open browser menu and choose Add to Home Screen.';
+                                return;
+                        }
+                        deferredInstallPrompt.prompt();
+                        await deferredInstallPrompt.userChoice;
+                        deferredInstallPrompt = null;
+                        installBtn.style.display = 'none';
+                });
+
+                if ('serviceWorker' in navigator) {
+                        window.addEventListener('load', () => {
+                                navigator.serviceWorker.register('/dashboard/sw.js', { scope: '/dashboard/' }).catch(() => {});
+                        });
+                }
+
+        loadState();
+    </script>
+</body>
+</html>
+

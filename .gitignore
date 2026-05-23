@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+
+# Local runtime/state
+weather_warfare.db
+*.log
+
+# Agent/browser session state
+data/propfinder_storage_state.json
+data/gambly_chromium_profile/
+
+# Debug artifacts
+data/debug_*.json
+data/debug_*.png
+data/debug_*.html
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
