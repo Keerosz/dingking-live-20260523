@@ -1529,10 +1529,19 @@ def _generate_dashboard_board(
         if df.empty:
             raise ValueError("No confirmed lineup players found. Turn off Lineup Lock or refresh lineups.")
 
-    if not allow_live:
-        df = _exclude_started_games(df)
-        if df.empty:
-            raise ValueError("All eligible games have already started. Turn on Live Bets or wait for next slate.")
+    requested_allow_live = bool(allow_live)
+    effective_allow_live = requested_allow_live
+    used_live_fallback = False
+
+    if not requested_allow_live:
+        non_live_df = _exclude_started_games(df)
+        if non_live_df.empty:
+            # Preserve dashboard generation by falling back to live-including data
+            # when every eligible game has already started.
+            effective_allow_live = True
+            used_live_fallback = True
+        else:
+            df = non_live_df
 
     config = _dashboard_config(
         num_slips=num_slips,
@@ -1579,6 +1588,9 @@ def _generate_dashboard_board(
     config.min_player_pool = adaptive_floor
 
     result = generate_portfolio_board(df, config=config)
+    result["requested_allow_live"] = requested_allow_live
+    result["effective_allow_live"] = effective_allow_live
+    result["used_live_fallback"] = used_live_fallback
     save_run(result["run_id"], result, run_label=f"dashboard_{mode}_{num_slips}x{legs_per_slip}")
     return result
 
