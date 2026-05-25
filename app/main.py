@@ -5607,8 +5607,13 @@ def dashboard_rankings(
 ):
     try:
         safe_limit = max(20, min(600, int(limit)))
-        category_key = _normalize_category_key(category)
-        subcategory_key = _normalize_subcategory_key(subcategory)
+        category_key = str(category or "hr").strip().lower()
+        if category_key not in {"hr", "hits", "tb", "rbi", "hrr", "value", "matchup", "recent"}:
+            category_key = "hr"
+
+        subcategory_key = str(subcategory or "overall").strip().lower()
+        if subcategory_key not in {"overall", "value", "safe", "contrarian"}:
+            subcategory_key = "overall"
 
         players = _build_dashboard_player_pool(lineup_locked_only=bool(lineup_locked_only), allow_live=bool(allow_live))
         rank_adjustments = _dashboard_rank_adjustments()
