@@ -5564,14 +5564,32 @@ def dashboard_refresh_late_swap():
 def dashboard_player_pool(limit: int = 120, lineup_locked_only: bool = False, allow_live: bool = False):
     try:
         safe_limit = max(20, min(600, int(limit)))
-        players = _build_dashboard_player_pool(lineup_locked_only=bool(lineup_locked_only), allow_live=bool(allow_live))
+        requested_allow_live = bool(allow_live)
+        effective_allow_live = requested_allow_live
+        players = _build_dashboard_player_pool(
+            lineup_locked_only=bool(lineup_locked_only),
+            allow_live=effective_allow_live,
+        )
+        used_live_fallback = False
+        if not players and not requested_allow_live:
+            fallback_players = _build_dashboard_player_pool(
+                lineup_locked_only=bool(lineup_locked_only),
+                allow_live=True,
+            )
+            if fallback_players:
+                players = fallback_players
+                effective_allow_live = True
+                used_live_fallback = True
+
         rank_adjustments = _dashboard_rank_adjustments()
         return {
             "status": "ok",
             "count": len(players),
             "limit": safe_limit,
             "lineup_locked_only": bool(lineup_locked_only),
-            "allow_live": bool(allow_live),
+            "allow_live": effective_allow_live,
+            "requested_allow_live": requested_allow_live,
+            "used_live_fallback": used_live_fallback,
             "rank_adjustments": rank_adjustments,
             "categories": [
                 {"key": "hr", "label": "Home Run Rank", "field": "hr_score"},
@@ -5615,7 +5633,23 @@ def dashboard_rankings(
         if subcategory_key not in {"overall", "value", "safe", "contrarian"}:
             subcategory_key = "overall"
 
-        players = _build_dashboard_player_pool(lineup_locked_only=bool(lineup_locked_only), allow_live=bool(allow_live))
+        requested_allow_live = bool(allow_live)
+        effective_allow_live = requested_allow_live
+        players = _build_dashboard_player_pool(
+            lineup_locked_only=bool(lineup_locked_only),
+            allow_live=effective_allow_live,
+        )
+        used_live_fallback = False
+        if not players and not requested_allow_live:
+            fallback_players = _build_dashboard_player_pool(
+                lineup_locked_only=bool(lineup_locked_only),
+                allow_live=True,
+            )
+            if fallback_players:
+                players = fallback_players
+                effective_allow_live = True
+                used_live_fallback = True
+
         rank_adjustments = _dashboard_rank_adjustments()
         categories = rank_adjustments.get("categories", {}) if isinstance(rank_adjustments, dict) else {}
         subcategories = rank_adjustments.get("subcategories", {}) if isinstance(rank_adjustments, dict) else {}
@@ -5652,7 +5686,9 @@ def dashboard_rankings(
             "category": category_key,
             "subcategory": subcategory_key,
             "lineup_locked_only": bool(lineup_locked_only),
-            "allow_live": bool(allow_live),
+            "allow_live": effective_allow_live,
+            "requested_allow_live": requested_allow_live,
+            "used_live_fallback": used_live_fallback,
             "count": len(ranked),
             "limit": safe_limit,
             "rank_adjustments": rank_adjustments,
