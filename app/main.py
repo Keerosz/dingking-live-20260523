@@ -5,6 +5,7 @@ import logging
 import secrets
 import html
 import json
+from collections import deque
 from pathlib import Path
 from threading import Event, Lock, Thread
 from datetime import datetime, timezone
@@ -43,7 +44,15 @@ from .models import (
 )
 from .scoring import add_scores
 from .service import generate_portfolio_board
-from .gambly_links import build_gambly_link
+from .gambly_links import GAMBLY_BET_BUILDER_BASE, build_gambly_link
+from .deeplink_layer import (
+    BOOK_LABELS,
+    BOOK_ONE_CLICK_CAPABILITY,
+    build_route_plan,
+    build_standardized_slip,
+    filter_books_for_region,
+    normalize_book_key,
+)
 
 app = FastAPI(title="DINGKING", version="0.1.0")
 agents = RealTimeResearchAgents(data_dir=Path(__file__).resolve().parent.parent / "data")
@@ -103,27 +112,95 @@ _rank_adjustments_last_refreshed_at: str | None = None
 GAMBLY_REDIRECT_TTL_SECONDS = 3600
 _gambly_redirect_cache: dict[str, tuple[float, str]] = {}
 _gambly_redirect_cache_lock = Lock()
+_gambly_redirect_target_index: dict[str, tuple[float, str]] = {}
+_recent_gambly_links: deque[dict[str, object]] = deque(maxlen=250)
 
 
-def _cache_gambly_redirect(url: str) -> str:
+def _record_gambly_link_event(
+    *,
+    status: str,
+    source: str,
+    target: str,
+    slip_id: str | None = None,
+    token: str | None = None,
+    reason: str | None = None,
+) -> None:
+    payload = {
+        "created_at": datetime.now(tz=timezone.utc).isoformat(),
+        "status": str(status or "").strip() or "unknown",
+        "source": str(source or "").strip() or "unknown",
+        "slip_id": str(slip_id or "").strip() or None,
+        "token": str(token or "").strip() or None,
+        "go_path": f"/dashboard/go/g/{token}" if str(token or "").strip() else None,
+        "target": str(target or "").strip() or None,
+        "reason": str(reason or "").strip() or None,
+    }
+    with _gambly_redirect_cache_lock:
+        _recent_gambly_links.appendleft(payload)
+
+
+def _recent_gambly_link_events(limit: int = 50) -> list[dict[str, object]]:
+    safe_limit = max(1, min(500, int(limit)))
+    with _gambly_redirect_cache_lock:
+        return list(_recent_gambly_links)[:safe_limit]
+
+
+def _cache_gambly_redirect(url: str, *, slip_id: str | None = None, source: str = "unknown") -> str:
     target = str(url or "").strip()
     if not target:
+        logger.warning(
+            "gambly_link create_failed",
+            extra={"reason": "empty_target", "source": source, "slip_id": slip_id},
+        )
+        _record_gambly_link_event(status="failed", source=source, target=target, slip_id=slip_id, reason="empty_target")
         return ""
+
     now = time.time()
     expires_at = now + GAMBLY_REDIRECT_TTL_SECONDS
+    token = ""
+    reused = False
     with _gambly_redirect_cache_lock:
         expired = [k for k, (exp, _) in _gambly_redirect_cache.items() if exp <= now]
         for key in expired:
             _gambly_redirect_cache.pop(key, None)
-        token = ""
-        for _ in range(4):
-            candidate = secrets.token_urlsafe(6)
-            if candidate not in _gambly_redirect_cache:
-                token = candidate
-                break
+
+        stale_targets = [target_key for target_key, (exp, _) in _gambly_redirect_target_index.items() if exp <= now]
+        for target_key in stale_targets:
+            _gambly_redirect_target_index.pop(target_key, None)
+
+        existing = _gambly_redirect_target_index.get(target)
+        if existing:
+            existing_exp, existing_token = existing
+            cached = _gambly_redirect_cache.get(existing_token)
+            if cached and cached[0] > now and cached[1] == target and existing_exp > now:
+                token = existing_token
+                reused = True
+
         if not token:
-            token = secrets.token_urlsafe(10)
+            for _ in range(4):
+                candidate = secrets.token_urlsafe(6)
+                if candidate not in _gambly_redirect_cache:
+                    token = candidate
+                    break
+            if not token:
+                token = secrets.token_urlsafe(10)
+
         _gambly_redirect_cache[token] = (expires_at, target)
+        _gambly_redirect_target_index[target] = (expires_at, token)
+
+    if reused:
+        logger.info(
+            "gambly_link reused",
+            extra={"source": source, "slip_id": slip_id, "token": token},
+        )
+        _record_gambly_link_event(status="reused", source=source, target=target, slip_id=slip_id, token=token)
+    else:
+        logger.info(
+            "gambly_link created",
+            extra={"source": source, "slip_id": slip_id, "token": token},
+        )
+        _record_gambly_link_event(status="created", source=source, target=target, slip_id=slip_id, token=token)
+
     return f"/dashboard/go/g/{token}"
 
 
@@ -143,7 +220,16 @@ def _resolve_cached_gambly_redirect(token: str) -> str | None:
         return target
 
 
-SUPPORTED_SPORTSBOOKS = {"gambly", "actionnetwork"}
+SUPPORTED_SPORTSBOOKS = {
+    "gambly",
+    "actionnetwork",
+    "fanduel",
+    "draftkings",
+    "fanatics",
+    "espn_bet",
+    "caesars",
+    "betmgm",
+}
 
 BOOK_SITE_DOMAINS = {
     "gambly": "gambly.com",
@@ -154,6 +240,17 @@ BOOK_SITE_DOMAINS = {
     "caesars": "caesars.com",
     "betmgm": "sports.betmgm.com",
     "actionnetwork": "actionnetwork.com",
+}
+
+BOOK_HOME_URLS = {
+    "gambly": "https://gambly.com/bet-builder?type=straight%7Cplayer_prop&partials=exclude&alts=exclude&minPrice=-200&maxPrice=200&limit=10&sort_by=popularity",
+    "fanduel": "https://sportsbook.fanduel.com/",
+    "draftkings": "https://sportsbook.draftkings.com/",
+    "fanatics": "https://sportsbook.fanatics.com/",
+    "espn_bet": "https://espnbet.com/",
+    "caesars": "https://www.caesars.com/sportsbook-and-casino",
+    "betmgm": "https://sports.betmgm.com/",
+    "actionnetwork": "https://www.actionnetwork.com/",
 }
 
 
@@ -250,13 +347,6 @@ class SportsbookLinkAgent:
         refreshed_books: list[str] = []
         for book in ("fanduel", "draftkings"):
             links = _fetch_book_player_links(book=book, api_key=api_key, market_keys=ALL_PLAYER_PROP_MARKET_KEYS)
-            if not links:
-                links = _fetch_book_player_links_from_event_odds(
-                    book=book,
-                    api_key=api_key,
-                    market_keys=ALL_PLAYER_PROP_MARKET_KEYS,
-                    max_events=10,
-                )
             team_links = _fetch_book_team_links(book=book, api_key=api_key) if not links else {}
             _set_link_cache(book=book, links=links, team_links=team_links)
             refreshed_books.append(book)
@@ -342,6 +432,147 @@ def _norm_player_name(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(value).lower())
 
 
+MLB_PLAYER_SUFFIXES = {"jr", "sr", "ii", "iii", "iv", "v"}
+MLB_MARKET_TARGET_POINTS = {
+    "batter_home_runs": 0.5,
+    "batter_hits": 0.5,
+    "batter_rbis": 0.5,
+    "batter_total_bases": 1.5,
+}
+
+PLAYER_ALIAS_FILE = ROOT_DIR / "data" / "player_aliases.json"
+PLAYER_ALIASES_DEFAULT: dict[str, list[str]] = {
+    "ronaldacuna": ["ronald acuna jr", "ronald acuna"],
+    "fernandotatis": ["fernando tatis jr", "fernando tatis"],
+    "vladimirguerrero": ["vladimir guerrero jr", "vladimir guerrero"],
+    "lourdesgurriel": ["lourdes gurriel jr", "lourdes gurriel"],
+}
+_player_alias_lookup_cache: dict[str, list[str]] | None = None
+_player_alias_lookup_cache_mtime: float | None = None
+_player_alias_lookup_lock = Lock()
+
+
+def _load_player_alias_lookup() -> dict[str, list[str]]:
+    global _player_alias_lookup_cache
+    global _player_alias_lookup_cache_mtime
+
+    file_mtime: float | None = None
+    try:
+        file_mtime = PLAYER_ALIAS_FILE.stat().st_mtime
+    except Exception:
+        file_mtime = None
+
+    with _player_alias_lookup_lock:
+        if _player_alias_lookup_cache is not None and _player_alias_lookup_cache_mtime == file_mtime:
+            return dict(_player_alias_lookup_cache)
+
+        lookup: dict[str, list[str]] = {}
+
+        def _store(key: str, value: str) -> None:
+            norm_key = _norm_player_name(key)
+            norm_value = _norm_player_name(value)
+            if not norm_key or not norm_value:
+                return
+            bucket = lookup.setdefault(norm_key, [])
+            if norm_value not in bucket:
+                bucket.append(norm_value)
+
+        for canonical, aliases in PLAYER_ALIASES_DEFAULT.items():
+            _store(canonical, canonical)
+            if isinstance(aliases, list):
+                for alias in aliases:
+                    _store(canonical, str(alias))
+                    _store(alias, canonical)
+
+        if file_mtime is not None:
+            try:
+                payload = json.loads(PLAYER_ALIAS_FILE.read_text(encoding="utf-8"))
+            except Exception:
+                payload = {}
+            if isinstance(payload, dict):
+                for canonical, aliases in payload.items():
+                    _store(str(canonical), str(canonical))
+                    if isinstance(aliases, list):
+                        for alias in aliases:
+                            _store(str(canonical), str(alias))
+                            _store(str(alias), str(canonical))
+
+        _player_alias_lookup_cache = lookup
+        _player_alias_lookup_cache_mtime = file_mtime
+        return dict(lookup)
+
+
+def _player_alias_keys(value: str) -> list[str]:
+    key = _norm_player_name(value)
+    if not key:
+        return []
+    lookup = _load_player_alias_lookup()
+    aliases = list(lookup.get(key, []))
+    if key not in aliases:
+        aliases.insert(0, key)
+    return aliases
+
+
+def _player_lookup_keys(value: str) -> list[str]:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return []
+
+    tokens = [token for token in re.findall(r"[a-z0-9]+", raw) if token]
+    if not tokens:
+        return []
+
+    candidates: list[str] = []
+
+    def _add(candidate: str) -> None:
+        key = _norm_player_name(candidate)
+        if key and key not in candidates:
+            candidates.append(key)
+
+    _add(" ".join(tokens))
+
+    # Drop common suffixes so `Ronald Acuna Jr` can match `Ronald Acuna` listings.
+    while len(tokens) > 2 and tokens[-1] in MLB_PLAYER_SUFFIXES:
+        tokens = tokens[:-1]
+        _add(" ".join(tokens))
+
+    if len(tokens) >= 2:
+        _add(f"{tokens[0]} {tokens[-1]}")
+        _add(f"{tokens[0][0]} {tokens[-1]}")
+
+    for alias_key in _player_alias_keys(" ".join(tokens)):
+        if alias_key not in candidates:
+            candidates.append(alias_key)
+
+    return candidates
+
+
+def _outcome_link_score(*, market_key: str, side: str, point: object) -> float:
+    side_key = str(side or "").strip().lower()
+    market = str(market_key or "").strip().lower()
+    score = 0.0
+
+    if side_key == "over":
+        score += 100.0
+    elif side_key in {"yes", "to hit"}:
+        score += 90.0
+    elif side_key == "under":
+        score += 10.0
+
+    target = MLB_MARKET_TARGET_POINTS.get(market)
+    try:
+        numeric_point = float(point)
+    except Exception:
+        numeric_point = None
+
+    if numeric_point is not None and target is not None:
+        score += max(0.0, 40.0 - (abs(numeric_point - target) * 25.0))
+    elif target is not None and side_key == "over":
+        score += 5.0
+
+    return score
+
+
 def _prop_label_for_request(mode: str, hits_profile: str) -> str:
     mode_key = str(mode).strip().lower()
     profile = str(hits_profile).strip().lower()
@@ -392,6 +623,32 @@ ALL_PLAYER_PROP_MARKET_KEYS = [
     "player_rbis",
 ]
 
+MLB_MARKET_ALIAS_MAP = {
+    "player_home_runs": "batter_home_runs",
+    "player_hits": "batter_hits",
+    "player_total_bases": "batter_total_bases",
+    "player_rbis": "batter_rbis",
+}
+
+MLB_VALID_PLAYER_PROP_MARKETS = {
+    "batter_home_runs",
+    "batter_hits",
+    "batter_total_bases",
+    "batter_rbis",
+}
+
+
+def _normalize_mlb_market_keys(market_keys: list[str]) -> set[str]:
+    normalized: set[str] = set()
+    for raw_key in market_keys:
+        key = str(raw_key).strip().lower()
+        if not key:
+            continue
+        key = MLB_MARKET_ALIAS_MAP.get(key, key)
+        if key in MLB_VALID_PLAYER_PROP_MARKETS:
+            normalized.add(key)
+    return normalized
+
 
 def _fallback_search_link(book: str, player_name: str, prop_label: str) -> str | None:
     domain = BOOK_SITE_DOMAINS.get(book)
@@ -399,7 +656,27 @@ def _fallback_search_link(book: str, player_name: str, prop_label: str) -> str |
     prop = str(prop_label).strip()
     if not domain or not player:
         return None
-    query = f'site:{domain} "{player}" "{prop}"'
+
+    tokens = [token for token in re.findall(r"[A-Za-z0-9]+", player) if token]
+    player_variants: list[str] = []
+
+    def _add_player_variant(value: str) -> None:
+        clean = str(value or "").strip()
+        if clean and clean not in player_variants:
+            player_variants.append(clean)
+
+    _add_player_variant(player)
+    if tokens:
+        while len(tokens) > 2 and tokens[-1].lower() in MLB_PLAYER_SUFFIXES:
+            tokens = tokens[:-1]
+            _add_player_variant(" ".join(tokens))
+
+    if len(player_variants) > 1:
+        player_clause = "(" + " OR ".join([f'"{name}"' for name in player_variants]) + ")"
+    else:
+        player_clause = f'"{player_variants[0]}"'
+
+    query = f'site:{domain} {player_clause} "{prop}"'
     return f"https://www.google.com/search?q={quote_plus(query)}"
 
 
@@ -446,10 +723,49 @@ def _compose_gambly_query_text(slip_text: str, target_sportsbook: str) -> str:
     return f"Sportsbook: {sportsbook_hint}\n{base}"
 
 
-def _build_gambly_slip_link(slip_text: str, target_sportsbook: str) -> str | None:
-    if not GAMBLY_ENABLED:
-        return None
-    return build_gambly_link(_compose_gambly_query_text(slip_text=slip_text, target_sportsbook=target_sportsbook))
+def _build_gambly_slip_link(slip_text: str, target_sportsbook: str) -> str:
+    try:
+        return build_gambly_link(_compose_gambly_query_text(slip_text=slip_text, target_sportsbook=target_sportsbook))
+    except Exception:
+        logger.exception(
+            "gambly_link create_failed",
+            extra={"reason": "build_exception", "target_sportsbook": target_sportsbook},
+        )
+        _record_gambly_link_event(
+            status="failed",
+            source="build_gambly_link",
+            target="",
+            reason="build_exception",
+        )
+        return GAMBLY_BET_BUILDER_BASE
+
+
+def _ensure_dashboard_slip_links(parlays: list[dict], mode: str, hits_profile: str) -> None:
+    prop_label = _prop_label_for_request(mode=mode, hits_profile=hits_profile)
+    for idx, slip in enumerate(parlays):
+        if not isinstance(slip, dict):
+            continue
+
+        slip_id = str(slip.get("slip_id") or "").strip()
+        if not slip_id:
+            slip_id = f"dashboard-S{idx + 1:02d}-{secrets.token_hex(2)}"
+            slip["slip_id"] = slip_id
+
+        slip_text = _compose_sportsbook_slip_text(slip=slip, idx=idx, prop_label=prop_label)
+        gambly_link = _build_gambly_slip_link(slip_text=slip_text, target_sportsbook="gambly")
+        go_path = str(slip.get("gambly_go_path") or slip.get("share_link_path") or "").strip()
+
+        go_token = ""
+        if go_path.startswith("/dashboard/go/g/"):
+            go_token = go_path.split("/")[-1].strip()
+        existing_target = _resolve_cached_gambly_redirect(go_token) if go_token else None
+        if (not go_path) or (existing_target != gambly_link):
+            go_path = _cache_gambly_redirect(gambly_link, slip_id=slip_id, source="dashboard_slip")
+
+        slip["sportsbook_text"] = slip_text
+        slip["gambly_link"] = gambly_link
+        slip["gambly_go_path"] = go_path
+        slip["share_link_path"] = go_path
 
 
 def _extract_gambly_text_from_link(link: str) -> str:
@@ -464,6 +780,86 @@ def _extract_gambly_text_from_link(link: str) -> str:
         return text
     except Exception:
         return ""
+
+
+def _extract_target_sportsbook_from_text(slip_text: str) -> str:
+    text = str(slip_text or "").strip()
+    if not text:
+        return "gambly"
+    first_line = text.splitlines()[0].strip()
+    if not first_line.lower().startswith("sportsbook:"):
+        return "gambly"
+    raw_target = first_line.split(":", 1)[1].strip()
+    return _normalize_target_sportsbook(raw_target)
+
+
+def _standardize_region_state(value: str | None) -> str:
+    return str(value or "").strip().upper()
+
+
+def _parse_preferred_books_param(preferred_books: str | None) -> list[str] | None:
+    raw = str(preferred_books or "").strip()
+    if not raw:
+        return None
+    parts = [normalize_book_key(item) for item in raw.split(",") if str(item).strip()]
+    output: list[str] = []
+    for item in parts:
+        if item not in output:
+            output.append(item)
+    return output or None
+
+
+def _build_slip_routing_payload(
+    *,
+    slip: dict,
+    slip_idx: int,
+    mode: str,
+    hits_profile: str,
+    country: str,
+    region_state: str,
+    base_origin: str,
+    preferred_books: list[str] | None,
+) -> dict[str, object]:
+    prop_label = _prop_label_for_request(mode=mode, hits_profile=hits_profile)
+    slip_text = _compose_sportsbook_slip_text(slip=slip, idx=slip_idx, prop_label=prop_label)
+    gambly_link = str(slip.get("gambly_link") or "").strip() or _build_gambly_slip_link(
+        slip_text=slip_text,
+        target_sportsbook="gambly",
+    )
+
+    go_path = str(slip.get("gambly_go_path") or slip.get("share_link_path") or "").strip()
+    go_token = go_path.split("/")[-1].strip() if go_path.startswith("/dashboard/go/g/") else ""
+    existing_target = _resolve_cached_gambly_redirect(go_token) if go_token else None
+    if (not go_path) or (existing_target != gambly_link):
+        go_path = _cache_gambly_redirect(gambly_link, slip_id=str(slip.get("slip_id") or "").strip(), source="routing_layer")
+
+    route_plan = build_route_plan(
+        country=country,
+        region_state=region_state,
+        preferred_books=preferred_books,
+        gambly_link=gambly_link,
+        go_path=go_path,
+        share_link_path=go_path,
+        base_origin=base_origin,
+    )
+    return {
+        "standard_slip": build_standardized_slip(slip),
+        "route_plan": route_plan,
+        "links": {
+            "gambly_link": gambly_link,
+            "gambly_go_path": go_path,
+            "share_link_path": go_path,
+        },
+        "capabilities": {
+            "books": {
+                book: {
+                    "label": BOOK_LABELS.get(book, book.title()),
+                    "one_click_capable": bool(BOOK_ONE_CLICK_CAPABILITY.get(book, False)),
+                }
+                for book in route_plan.get("books", [])
+            }
+        },
+    }
 
 
 def _is_mobile_user_agent(user_agent: str) -> bool:
@@ -553,69 +949,15 @@ def _fetch_book_player_links(
     market_keys: list[str],
     diagnostics: dict[str, object] | None = None,
 ) -> dict[str, str]:
-    wanted_markets = {str(key).strip().lower() for key in market_keys if str(key).strip()}
-    if not wanted_markets:
-        return {}
-
-    url = "https://api.the-odds-api.com/v4/sports/baseball_mlb/odds"
-    params = {
-        "apiKey": api_key,
-        "bookmakers": book,
-        "markets": ",".join(sorted(wanted_markets)),
-        "regions": "us",
-        "oddsFormat": "american",
-        "includeLinks": "true",
-        "includeSids": "true",
-    }
-    try:
-        response = requests.get(url, params=params, timeout=ODDS_API_TIMEOUT_SECONDS)
-        response.raise_for_status()
-        payload = response.json()
-    except Exception as exc:
-        logger.exception("sportsbook_resolver provider_exception", extra={"book": book, "stage": "provider_primary_or_backup"})
-        if diagnostics is not None:
-            diagnostics["error"] = "provider_timeout" if isinstance(exc, requests.exceptions.Timeout) else "provider_unavailable"
-            diagnostics["timeout"] = bool(isinstance(exc, requests.exceptions.Timeout))
-        return {}
-
-    if not isinstance(payload, list):
-        return {}
-
-    links_by_player: dict[str, str] = {}
-    for event in payload:
-        if not isinstance(event, dict):
-            continue
-        for bookmaker in event.get("bookmakers", []):
-            if not isinstance(bookmaker, dict):
-                continue
-            if str(bookmaker.get("key", "")).lower() != book:
-                continue
-            for market in bookmaker.get("markets", []):
-                if not isinstance(market, dict):
-                    continue
-                if str(market.get("key", "")).lower() not in wanted_markets:
-                    continue
-                for outcome in market.get("outcomes", []):
-                    if not isinstance(outcome, dict):
-                        continue
-                    link = str(outcome.get("link", "")).strip()
-                    if not link:
-                        continue
-                    player = str(outcome.get("description") or outcome.get("name") or "").strip()
-                    if not player:
-                        continue
-                    key = _norm_player_name(player)
-                    if not key:
-                        continue
-                    # Prefer explicit over 0.5 player links where provided.
-                    point = outcome.get("point")
-                    side = str(outcome.get("name", "")).strip().lower()
-                    if side == "over" and point == 0.5:
-                        links_by_player[key] = link
-                    else:
-                        links_by_player.setdefault(key, link)
-
-    return links_by_player
+    # MLB player-prop markets are returned on event-level odds endpoints.
+    # The league-level /sports/.../odds endpoint rejects these markets with 422.
+    return _fetch_book_player_links_from_event_odds(
+        book=book,
+        api_key=api_key,
+        market_keys=market_keys,
+        max_events=20,
+        diagnostics=diagnostics,
+    )
 
 
 def _fetch_book_player_links_from_event_odds(
@@ -625,7 +967,7 @@ def _fetch_book_player_links_from_event_odds(
     max_events: int = 20,
     diagnostics: dict[str, object] | None = None,
 ) -> dict[str, str]:
-    wanted_markets = {str(key).strip().lower() for key in market_keys if str(key).strip()}
+    wanted_markets = _normalize_mlb_market_keys(market_keys)
     if not wanted_markets:
         return {}
 
@@ -663,6 +1005,7 @@ def _fetch_book_player_links_from_event_odds(
         return {}
 
     links_by_player: dict[str, str] = {}
+    best_score_by_player: dict[str, float] = {}
     odds_base = "https://api.the-odds-api.com/v4/sports/baseball_mlb/events"
     odds_params = {
         "apiKey": api_key,
@@ -715,12 +1058,15 @@ def _fetch_book_player_links_from_event_odds(
                     key = _norm_player_name(player)
                     if not key:
                         continue
+                    market_key = str(market.get("key", "")).strip().lower()
                     point = outcome.get("point")
                     side = str(outcome.get("name", "")).strip().lower()
-                    if side == "over" and point == 0.5:
-                        links_by_player[key] = link
-                    else:
-                        links_by_player.setdefault(key, link)
+                    score = _outcome_link_score(market_key=market_key, side=side, point=point)
+                    for candidate_key in _player_lookup_keys(player):
+                        existing = best_score_by_player.get(candidate_key)
+                        if existing is None or score > existing:
+                            links_by_player[candidate_key] = link
+                            best_score_by_player[candidate_key] = score
 
     return links_by_player
 
@@ -2548,7 +2894,7 @@ DASHBOARD_HTML = """
             <button class="btn-all" id="btnAll">Generate All 20</button>
             <button class="btn-one" id="btnOne">Generate 1 New</button>
             <button class="btn-one" id="btnLateSwap">Late Swap Refresh</button>
-            <button class="btn-one" id="btnCopyAll">Sportsbook Portal (All)</button>
+            <button class="btn-one" id="btnCopyAll">One-Click Portal (All)</button>
             <button class="btn-one" id="btnInstall" style="display:none;">Install App</button>
             <label>
                 Legs
@@ -2645,7 +2991,7 @@ DASHBOARD_HTML = """
         </section>
         <section class="builder" id="builderSection">
             <h2>Build Your Own Parlay</h2>
-            <div class="builder-sub">Choose ranking category + subcategory, add players to your ticket, then launch Sportsbook Portal.</div>
+            <div class="builder-sub">Choose ranking category + subcategory, add players to your ticket, then launch One-Click Portal.</div>
             <div class="builder-tools">
                 <select id="builderCategorySel">
                     <option value="hr">Home Run Rank</option>
@@ -2671,7 +3017,7 @@ DASHBOARD_HTML = """
                 </select>
                 <button class="btn-one" id="builderRefreshBtn">Refresh Rankings</button>
                 <button class="btn-one" id="builderClearBtn">Clear Ticket</button>
-                <button class="btn-all" id="builderPortalBtn">Sportsbook Portal (Custom)</button>
+                <button class="btn-all" id="builderPortalBtn">One-Click Portal (Custom)</button>
             </div>
             <div class="builder-panels">
                 <article class="builder-card">
@@ -2702,13 +3048,11 @@ DASHBOARD_HTML = """
 
     <div class="portal-overlay" id="portalOverlay" role="dialog" aria-modal="true" aria-labelledby="portalTitle">
         <div class="portal-modal">
-            <h2 class="portal-title" id="portalTitle">Open Sportsbook</h2>
-            <p class="portal-copy" id="portalText">Choose a sportsbook. DINGKING will copy your slip text, then open that book.</p>
+            <h2 class="portal-title" id="portalTitle">One-Click Sportsbook</h2>
+            <p class="portal-copy" id="portalText">Choose where to open this slip.</p>
             <div class="portal-actions">
                 <button class="btn-all" id="portalGambly">Open Gambly</button>
-                <button class="btn-one" id="portalAction">Open Action Network</button>
-                <button class="btn-one" id="portalCopyGambly">Copy Gambly Link</button>
-                <button class="btn-one" id="portalShareGambly">Share Gambly Link</button>
+                <button class="btn-one" id="portalDraftkings">Open DraftKings</button>
             </div>
             <button class="portal-close" id="portalClose">Cancel</button>
         </div>
@@ -2733,12 +3077,8 @@ DASHBOARD_HTML = """
         const copyAllBtn = document.getElementById('btnCopyAll');
         const portalOverlay = document.getElementById('portalOverlay');
         const portalText = document.getElementById('portalText');
-        const portalGambly = document.getElementById('portalGambly')
-            || document.getElementById('portalFanduel')
-            || document.getElementById('portalDraftkings');
-        const portalAction = document.getElementById('portalAction');
-        const portalCopyGambly = document.getElementById('portalCopyGambly');
-        const portalShareGambly = document.getElementById('portalShareGambly');
+        const portalGambly = document.getElementById('portalGambly');
+        const portalDraftkings = document.getElementById('portalDraftkings');
         const portalClose = document.getElementById('portalClose');
         const builderCategorySel = document.getElementById('builderCategorySel');
         const builderSubcategorySel = document.getElementById('builderSubcategorySel');
@@ -2756,6 +3096,7 @@ DASHBOARD_HTML = """
         let deferredInstallPrompt = null;
         let portalPayload = null;
         let portalGamblyLink = '';
+        const STRICT_ONE_CLICK_MODE = true;
         window.__lastParlays = [];
         window.__builderPool = [];
         window.__builderTicket = [];
@@ -2867,13 +3208,41 @@ DASHBOARD_HTML = """
         const SPORTSBOOKS = {
             gambly: {
                 label: 'Gambly',
-                url: 'https://gambly.com/bet-builder?type=straight%7Cplayer_prop&partials=exclude&alts=exclude&minPrice=-200&maxPrice=200&limit=10&sort_by=popularity'
+                url: 'https://gambly.com/bet-builder?type=straight%7Cplayer_prop&partials=exclude&alts=exclude&minPrice=-200&maxPrice=200&limit=10&sort_by=popularity',
+                oneClick: true,
             },
-            actionnetwork: {
-                label: 'Action Network',
-                url: 'https://www.actionnetwork.com/'
+            draftkings: {
+                label: 'DraftKings',
+                url: 'https://sportsbook.draftkings.com/',
+                oneClick: true,
             }
         };
+
+        function setPortalButtonState(btn, enabled, label) {
+            if (!btn) return;
+            if (label) btn.textContent = label;
+            btn.disabled = !enabled;
+            btn.style.opacity = enabled ? '1' : '0.55';
+            btn.style.cursor = enabled ? 'pointer' : 'not-allowed';
+        }
+
+        function oneClickBooks() {
+            return Object.values(SPORTSBOOKS)
+                .filter((book) => !!book?.oneClick)
+                .map((book) => String(book.label || '').trim())
+                .filter((x) => x);
+        }
+
+        function refreshPortalCapabilities() {
+            setPortalButtonState(portalGambly, !!SPORTSBOOKS.gambly?.oneClick, 'Open Gambly');
+            setPortalButtonState(portalDraftkings, !!SPORTSBOOKS.draftkings?.oneClick, 'Open DraftKings');
+
+            const hasOneClick = oneClickBooks().length > 0;
+            if (strictLinksChk) {
+                strictLinksChk.disabled = STRICT_ONE_CLICK_MODE && !hasOneClick;
+                if (strictLinksChk.disabled) strictLinksChk.checked = false;
+            }
+        }
 
         function sportsbookSlipText(slip, idx) {
             const lines = [];
@@ -2910,38 +3279,6 @@ DASHBOARD_HTML = """
             const idx = Number(payload?.idx || 0);
             const oneSlipText = sportsbookSlipText(payload?.slip || {}, idx);
             return `Sportsbook: Gambly\\n${oneSlipText}`.trim();
-        }
-
-        async function copyPortalGamblyLink() {
-            const link = String(portalGamblyLink || '').trim();
-            if (!link) {
-                statusText.textContent = 'No Gambly link available yet.';
-                return;
-            }
-            await copyText(link, 'Copied Gambly share link.');
-        }
-
-        async function sharePortalGamblyLink() {
-            const link = String(portalGamblyLink || '').trim();
-            if (!link) {
-                statusText.textContent = 'No Gambly link available yet.';
-                return;
-            }
-            const sharePayload = {
-                title: 'DINGKING Betslip',
-                text: 'Open this betslip in Gambly',
-                url: link,
-            };
-            if (navigator.share) {
-                try {
-                    await navigator.share(sharePayload);
-                    statusText.textContent = 'Shared Gambly link.';
-                    return;
-                } catch {
-                    // If native share is canceled/unavailable, fallback to copy.
-                }
-            }
-            await copyText(link, 'Share unavailable on this device. Copied Gambly link instead.');
         }
 
         function builderMetricValue(player, categoryKey) {
@@ -3168,6 +3505,73 @@ DASHBOARD_HTML = """
             }
         }
 
+        function absoluteDashboardUrl(path) {
+            const trimmed = String(path || '').trim();
+            if (!trimmed) return '';
+            try {
+                return new URL(trimmed, window.location.origin).toString();
+            } catch {
+                return trimmed;
+            }
+        }
+
+        function slipShareUrl(slip) {
+            const candidates = [
+                slip?.gambly_go_path,
+                slip?.share_link_path,
+            ];
+            for (const candidate of candidates) {
+                const trimmed = String(candidate || '').trim();
+                if (trimmed && trimmed.includes('/dashboard/go/g/')) {
+                    return absoluteDashboardUrl(trimmed);
+                }
+            }
+            return '';
+        }
+
+        function appendSlipActionButtons(el, slip, idx) {
+            const sportsbookBtn = document.createElement('button');
+            sportsbookBtn.className = 'btn-one';
+            sportsbookBtn.textContent = 'Sportsbook Portal';
+            sportsbookBtn.style.width = '100%';
+            sportsbookBtn.style.marginTop = '6px';
+            sportsbookBtn.addEventListener('click', () => showPortal({ all: false, slip, idx }));
+            el.appendChild(sportsbookBtn);
+
+            const openBtn = document.createElement('button');
+            openBtn.className = 'btn-all';
+            openBtn.textContent = 'Open in Gambly';
+            openBtn.style.width = '100%';
+            openBtn.style.marginTop = '6px';
+            openBtn.addEventListener('click', () => {
+                const shareUrl = slipShareUrl(slip);
+                const fallbackLink = String(slip?.gambly_link || '').trim() || buildGamblyLinkClient(sportsbookSlipText(slip || {}, idx));
+                const target = shareUrl || fallbackLink;
+                if (!target) {
+                    statusText.textContent = 'No Gambly link available for this slip.';
+                    return;
+                }
+                window.open(target, '_blank', 'noopener,noreferrer');
+                statusText.textContent = `Opened Gambly for slip #${idx + 1}.`;
+            });
+            el.appendChild(openBtn);
+
+            const copyLinkBtn = document.createElement('button');
+            copyLinkBtn.className = 'btn-one';
+            copyLinkBtn.textContent = 'Copy link';
+            copyLinkBtn.style.width = '100%';
+            copyLinkBtn.style.marginTop = '6px';
+            copyLinkBtn.addEventListener('click', async () => {
+                const shareUrl = slipShareUrl(slip);
+                if (!shareUrl) {
+                    statusText.textContent = 'No dashboard/go link available for this slip yet.';
+                    return;
+                }
+                await copyText(shareUrl, `Copied slip #${idx + 1} link.`);
+            });
+            el.appendChild(copyLinkBtn);
+        }
+
         function esc(s) {
             return String(s ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
         }
@@ -3386,9 +3790,13 @@ DASHBOARD_HTML = """
         function showPortal(payload) {
             portalPayload = payload;
             portalGamblyLink = buildGamblyLinkClient(buildPortalGamblyText(payload));
-            portalText.textContent = payload?.all
-                ? 'Choose Gambly or Action Network. DINGKING will copy all slips, then open the sportsbook.'
-                : `Choose Gambly or Action Network. DINGKING will copy slip #${(payload?.idx ?? 0) + 1}${payload?.slip?.slip_id ? ` (${payload.slip.slip_id})` : ''}, then open the sportsbook.`;
+            const available = oneClickBooks();
+            portalText.textContent = available.length
+                ? (payload?.all
+                    ? `Available one-click books: ${available.join(', ')}. DINGKING will copy all slips, then open that book.`
+                    : `Available one-click books: ${available.join(', ')}. DINGKING will copy slip #${(payload?.idx ?? 0) + 1}${payload?.slip?.slip_id ? ` (${payload.slip.slip_id})` : ''}, then open that book.`)
+                : 'No one-click sportsbook is enabled right now. Manual-only books are disabled in strict mode.';
+            refreshPortalCapabilities();
             portalOverlay.classList.add('show');
         }
 
@@ -3402,6 +3810,11 @@ DASHBOARD_HTML = """
             if (!portalPayload) return;
             const book = SPORTSBOOKS[bookKey];
             if (!book) return;
+            if (STRICT_ONE_CLICK_MODE && !book.oneClick) {
+                statusText.textContent = `${book.label} is manual-only. Strict one-click mode blocked this launch.`;
+                hidePortal();
+                return;
+            }
 
             // Reserve one user-gesture popup immediately to reduce popup-blocker failures
             // once async resolution completes.
@@ -3485,7 +3898,7 @@ DASHBOARD_HTML = """
             // On some phone in-app browsers, popup navigation is unreliable.
             // For Gambly, force same-tab navigation for consistent behavior.
             if (bookKey === 'gambly') {
-                const fallbackTarget = resolvedGamblyLink || book.url;
+                const fallbackTarget = resolvedGamblyLink || SPORTSBOOKS.gambly.url;
                 if (portalPayload.all) {
                     const text = Array.from(cards.querySelectorAll('.card')).map((_, i) => sportsbookSlipText(window.__lastParlays?.[i] || {}, i)).join('\\n\\n');
                     if (!text.trim()) {
@@ -3513,7 +3926,7 @@ DASHBOARD_HTML = """
                 await copyText(text, `Copied all slips. Opening ${book.label}.`);
                 const links = Array.isArray(resolved?.links) ? resolved.links.filter((x) => typeof x === 'string' && x.trim()) : [];
                 const effectiveLinks = bookKey === 'gambly' ? [] : links;
-                const fallbackTarget = resolvedGamblyLink || book.url;
+                const fallbackTarget = resolvedGamblyLink || SPORTSBOOKS.gambly.url;
                 if (effectiveLinks.length) {
                     if (isMobileDevice()) {
                         navigateWithFallback(preOpenedWindow, effectiveLinks[0], fallbackTarget);
@@ -3540,7 +3953,7 @@ DASHBOARD_HTML = """
                 ? resolved.slip_links[0].filter((x) => typeof x === 'string' && x.trim())
                 : [];
             const effectiveLegLinks = bookKey === 'gambly' ? [] : legLinks;
-            const fallbackTarget = resolvedGamblyLink || book.url;
+            const fallbackTarget = resolvedGamblyLink || SPORTSBOOKS.gambly.url;
             if (effectiveLegLinks.length) {
                 if (isMobileDevice()) {
                     navigateWithFallback(preOpenedWindow, effectiveLegLinks[0], fallbackTarget);
@@ -3581,13 +3994,7 @@ DASHBOARD_HTML = """
                     <div class=\"story\">${esc(slip.story || '')}</div>
                     ${legsHtml}
                 `;
-                const copyBtn = document.createElement('button');
-                copyBtn.className = 'btn-one';
-                copyBtn.textContent = 'Sportsbook Portal';
-                copyBtn.style.width = '100%';
-                copyBtn.style.marginTop = '6px';
-                copyBtn.addEventListener('click', () => showPortal({ all: false, slip, idx }));
-                el.appendChild(copyBtn);
+                appendSlipActionButtons(el, slip, idx);
                 cards.appendChild(el);
             });
         }
@@ -3737,13 +4144,7 @@ DASHBOARD_HTML = """
                     parlays: window.__lastParlays,
                 });
                 syncSlateRefreshPill({ generated_at: data.generated_at, source_csv_mtime: window.__lastState?.source_csv_mtime });
-                const copyBtn = document.createElement('button');
-                copyBtn.className = 'btn-one';
-                copyBtn.textContent = 'Sportsbook Portal';
-                copyBtn.style.width = '100%';
-                copyBtn.style.marginTop = '6px';
-                copyBtn.addEventListener('click', () => showPortal({ all: false, slip, idx: data.replaced_slot }));
-                card.appendChild(copyBtn);
+                appendSlipActionButtons(card, slip, data.replaced_slot);
             } else {
                 loadState();
             }
@@ -3779,15 +4180,10 @@ DASHBOARD_HTML = """
         if (portalGambly) {
             portalGambly.addEventListener('click', () => submitPortal('gambly'));
         }
-        if (portalAction) {
-            portalAction.addEventListener('click', () => submitPortal('actionnetwork'));
+        if (portalDraftkings) {
+            portalDraftkings.addEventListener('click', () => submitPortal('draftkings'));
         }
-        if (portalCopyGambly) {
-            portalCopyGambly.addEventListener('click', copyPortalGamblyLink);
-        }
-        if (portalShareGambly) {
-            portalShareGambly.addEventListener('click', sharePortalGamblyLink);
-        }
+        refreshPortalCapabilities();
         builderCategorySel.addEventListener('change', renderBuilderRankings);
         builderSubcategorySel.addEventListener('change', renderBuilderRankings);
         builderLimitSel.addEventListener('change', loadBuilderPool);
@@ -4307,13 +4703,35 @@ def dashboard_go_gambly(token: str, request: Request):
         if str(request.query_params.get("direct") or "").strip() == "1":
                 return RedirectResponse(url=target, status_code=307)
 
-        force_launchpad = str(request.query_params.get("launchpad") or "").strip() == "1"
-        if (not force_launchpad) and (not _is_mobile_user_agent(request.headers.get("user-agent", ""))):
-                return RedirectResponse(url=target, status_code=307)
-
         slip_text = _extract_gambly_text_from_link(target)
+        target_sportsbook = _extract_target_sportsbook_from_text(slip_text)
+        target_sportsbook_url = BOOK_HOME_URLS.get(target_sportsbook, BOOK_HOME_URLS["gambly"])
+        target_sportsbook_label = target_sportsbook.replace("_", " ").title()
+        slip_lines = [line.strip() for line in str(slip_text or "").replace("\r\n", "\n").split("\n") if line.strip()]
+        leg_lines: list[str] = []
+        for line in slip_lines:
+            lower = line.lower()
+            if lower.startswith("sportsbook:"):
+                continue
+            if line.startswith("#"):
+                continue
+            leg_lines.append(line)
+        leg_items_html = "".join(
+            [
+                (
+                    "<li class='leg-item'>"
+                    f"<label><input type='checkbox' class='leg-check' data-leg-index='{idx}' data-leg='{html.escape(leg)}'/>"
+                    f" <span>{html.escape(leg)}</span></label>"
+                    f"<button type='button' class='leg-copy secondary' data-leg='{html.escape(leg)}'>Copy Leg</button>"
+                    "</li>"
+                )
+                for idx, leg in enumerate(leg_lines)
+            ]
+        )
         slip_display = html.escape(slip_text) if slip_text else "No slip text detected for this link."
         safe_target = html.escape(target)
+        safe_target_sportsbook_url = html.escape(target_sportsbook_url)
+        safe_target_sportsbook_label = html.escape(target_sportsbook_label)
         html_doc = f"""<!doctype html>
 <html lang='en'>
 <head>
@@ -4338,8 +4756,10 @@ def dashboard_go_gambly(token: str, request: Request):
         }}
         h1 {{ margin: 0 0 10px; font-size: 20px; }}
         p {{ margin: 0 0 10px; line-height: 1.4; }}
-        pre {{
-            white-space: pre-wrap;
+        textarea {{
+            width: 100%;
+            min-height: 130px;
+            resize: vertical;
             margin: 0;
             border-radius: 10px;
             background: rgba(0, 0, 0, 0.35);
@@ -4347,8 +4767,48 @@ def dashboard_go_gambly(token: str, request: Request):
             padding: 10px;
             font-size: 13px;
             color: #fff3d0;
+            line-height: 1.4;
+            font-family: Consolas, 'Courier New', monospace;
         }}
         .row {{ display: grid; gap: 8px; margin-top: 12px; }}
+        .quick-links {{
+            margin-top: 10px;
+            display: grid;
+            gap: 6px;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }}
+        .quick-links a {{
+            text-align: center;
+            padding: 10px 8px;
+            border-radius: 10px;
+            border: 1px solid rgba(255, 210, 101, 0.4);
+            color: #ffe3a8;
+            text-decoration: none;
+            font-weight: 700;
+            background: rgba(0, 0, 0, 0.18);
+        }}
+        .leg-checklist {{
+            margin-top: 12px;
+            border-radius: 10px;
+            border: 1px solid rgba(255, 210, 101, 0.3);
+            background: rgba(0, 0, 0, 0.25);
+            padding: 10px;
+        }}
+        .leg-checklist h2 {{ margin: 0 0 8px; font-size: 16px; }}
+        .leg-checklist .meta {{ font-size: 12px; color: #efcd84; margin-bottom: 8px; }}
+        .leg-list {{ list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }}
+        .leg-item {{
+            display: grid;
+            gap: 8px;
+            align-items: center;
+            grid-template-columns: 1fr auto;
+            border: 1px solid rgba(255, 210, 101, 0.25);
+            border-radius: 8px;
+            padding: 8px;
+            background: rgba(34, 20, 2, 0.6);
+        }}
+        .leg-item label {{ font-size: 13px; line-height: 1.35; }}
+        .leg-actions {{ margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }}
         button, a.btn {{
             display: block;
             width: 100%;
@@ -4368,30 +4828,235 @@ def dashboard_go_gambly(token: str, request: Request):
 <body>
     <div class='card'>
         <h1>DINGKING Slip Ready</h1>
-        <p>Your slip text is below. Copy it, then open Gambly.</p>
-        <pre id='slipText'>{slip_display}</pre>
+        <p>Your slip text is below. Copy, download, or share it, then open your sportsbook.</p>
+        <textarea id='slipText' readonly>{slip_display}</textarea>
         <div class='row'>
             <button id='copyBtn' class='secondary'>Copy Slip Text</button>
+            <button id='selectBtn' class='secondary' type='button'>Select Slip Text</button>
+            <button id='copyLegsBtn' class='secondary' type='button'>Copy All Legs</button>
+            <button id='downloadTxtBtn' class='secondary' type='button'>Download Slip .txt</button>
+            <button id='shareBtn' class='secondary' type='button'>Share Slip</button>
+            <a id='openTargetBtn' class='btn secondary' href='{safe_target_sportsbook_url}' rel='noopener noreferrer'>Open {safe_target_sportsbook_label}</a>
+            <a id='openActionBtn' class='btn secondary' href='https://www.actionnetwork.com/' rel='noopener noreferrer'>Open Action Network</a>
             <a id='openBtn' class='btn primary' href='{safe_target}' rel='noopener noreferrer'>Open Gambly</a>
             <a class='btn secondary' href='/dashboard'>Back to Dashboard</a>
         </div>
-        <div class='hint'>If Gambly still opens a generic builder screen, paste the copied text into Gambly search/chat.</div>
+        <div class='quick-links'>
+            <a href='https://sportsbook.fanduel.com/' rel='noopener noreferrer'>FanDuel Home</a>
+            <a href='https://sportsbook.draftkings.com/' rel='noopener noreferrer'>DraftKings Home</a>
+            <a href='https://www.betmgm.com/' rel='noopener noreferrer'>BetMGM Home</a>
+            <a href='https://www.caesars.com/sportsbook-and-casino' rel='noopener noreferrer'>Caesars Home</a>
+        </div>
+        <div class='leg-checklist'>
+            <h2>Leg Checklist</h2>
+            <div class='meta' id='progressText'>0/{len(leg_lines)} added</div>
+            <ul class='leg-list'>
+                {leg_items_html or "<li class='meta'>No leg lines were detected from this slip.</li>"}
+            </ul>
+            <div class='leg-actions'>
+                <button id='resetChecksBtn' class='secondary' type='button'>Reset Checks</button>
+            </div>
+        </div>
+        <div class='hint'>Best flow: copy first, open your sportsbook, then paste/select legs. If direct book flow fails, open Gambly.</div>
     </div>
     <script>
         const copyBtn = document.getElementById('copyBtn');
+        const selectBtn = document.getElementById('selectBtn');
+        const copyLegsBtn = document.getElementById('copyLegsBtn');
+        const downloadTxtBtn = document.getElementById('downloadTxtBtn');
+        const shareBtn = document.getElementById('shareBtn');
         const slipText = document.getElementById('slipText');
-        copyBtn.addEventListener('click', async () => {{
+        const rawSlipText = {json.dumps(str(slip_text or ''))};
+        const progressText = document.getElementById('progressText');
+        const legChecks = Array.from(document.querySelectorAll('.leg-check'));
+        const legCopyButtons = Array.from(document.querySelectorAll('.leg-copy'));
+        const resetChecksBtn = document.getElementById('resetChecksBtn');
+        const storageKey = 'dk_legcheck_{token}';
+
+        function fallbackCopyText(text) {{
+            const ta = document.createElement('textarea');
+            ta.value = text || '';
+            ta.setAttribute('readonly', 'readonly');
+            ta.style.position = 'fixed';
+            ta.style.top = '-9999px';
+            ta.style.left = '-9999px';
+            document.body.appendChild(ta);
+            ta.focus();
+            ta.select();
+            ta.setSelectionRange(0, ta.value.length);
+            let ok = false;
             try {{
-                await navigator.clipboard.writeText(slipText.textContent || '');
-                copyBtn.textContent = 'Copied';
+                ok = document.execCommand('copy') === true;
             }} catch {{
-                copyBtn.textContent = 'Copy blocked on this browser';
+                ok = false;
             }}
+            document.body.removeChild(ta);
+            return ok;
+        }}
+
+        async function tryCopyText(text) {{
+            const safeText = String(text || '');
+            try {{
+                if (navigator && navigator.clipboard && navigator.clipboard.writeText) {{
+                    await navigator.clipboard.writeText(safeText);
+                    return true;
+                }}
+            }} catch {{}}
+            return fallbackCopyText(safeText);
+        }}
+
+        async function tryCopy() {{
+            const ok = await tryCopyText(rawSlipText || slipText.value || '');
+            if (ok) {{
+                copyBtn.textContent = 'Copied';
+                return;
+            }}
+            copyBtn.textContent = 'Copy failed - select text below';
+            if (slipText) {{
+                slipText.focus();
+                slipText.select();
+            }}
+        }}
+
+        function updateProgress() {{
+            if (!progressText) return;
+            const checked = legChecks.filter((el) => el.checked).length;
+            progressText.textContent = `${{checked}}/${{legChecks.length}} added`;
+        }}
+
+        function persistChecks() {{
+            try {{
+                const values = legChecks.map((el) => !!el.checked);
+                localStorage.setItem(storageKey, JSON.stringify(values));
+            }} catch {{}}
+        }}
+
+        function restoreChecks() {{
+            try {{
+                const raw = localStorage.getItem(storageKey);
+                if (!raw) return;
+                const values = JSON.parse(raw);
+                if (!Array.isArray(values)) return;
+                legChecks.forEach((el, idx) => {{
+                    el.checked = !!values[idx];
+                }});
+            }} catch {{}}
+        }}
+
+        legChecks.forEach((el) => {{
+            el.addEventListener('change', () => {{
+                updateProgress();
+                persistChecks();
+            }});
         }});
+
+        legCopyButtons.forEach((btn) => {{
+            btn.addEventListener('click', async () => {{
+                const legText = String(btn.getAttribute('data-leg') || '').trim();
+                if (!legText) return;
+                const ok = await tryCopyText(legText);
+                if (ok) {{
+                    btn.textContent = 'Copied';
+                }} else {{
+                    btn.textContent = 'Copy failed';
+                }}
+            }});
+        }});
+
+        if (copyLegsBtn) {{
+            copyLegsBtn.addEventListener('click', async () => {{
+                const legsText = legChecks
+                    .map((el) => String(el.getAttribute('data-leg') || '').trim())
+                    .filter((x) => x)
+                    .join('\\n');
+                if (!legsText) {{
+                    copyLegsBtn.textContent = 'No legs found';
+                    return;
+                }}
+                const ok = await tryCopyText(legsText);
+                copyLegsBtn.textContent = ok ? 'Legs copied' : 'Copy failed';
+            }});
+        }}
+
+        if (selectBtn && slipText) {{
+            selectBtn.addEventListener('click', () => {{
+                slipText.focus();
+                slipText.select();
+                selectBtn.textContent = 'Selected';
+            }});
+        }}
+
+        if (downloadTxtBtn) {{
+            downloadTxtBtn.addEventListener('click', () => {{
+                const content = rawSlipText || slipText.value || '';
+                const blob = new Blob([content], {{ type: 'text/plain;charset=utf-8' }});
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'dingking-slip-{token}.txt';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                setTimeout(() => URL.revokeObjectURL(url), 2000);
+                downloadTxtBtn.textContent = 'Downloaded';
+            }});
+        }}
+
+        if (shareBtn) {{
+            shareBtn.addEventListener('click', async () => {{
+                const content = rawSlipText || slipText.value || '';
+                try {{
+                    if (navigator && navigator.share) {{
+                        await navigator.share({{ title: 'DINGKING Slip', text: content }});
+                        shareBtn.textContent = 'Shared';
+                        return;
+                    }}
+                }} catch {{}}
+                const ok = await tryCopyText(content);
+                shareBtn.textContent = ok ? 'Copied for sharing' : 'Share unavailable';
+            }});
+        }}
+
+        if (slipText) {{
+            slipText.addEventListener('click', () => {{
+                slipText.focus();
+                slipText.select();
+            }});
+        }}
+
+        if (resetChecksBtn) {{
+            resetChecksBtn.addEventListener('click', () => {{
+                legChecks.forEach((el) => {{ el.checked = false; }});
+                updateProgress();
+                persistChecks();
+            }});
+        }}
+
+        copyBtn.addEventListener('click', async () => {{
+            await tryCopy();
+        }});
+        restoreChecks();
+        updateProgress();
     </script>
 </body>
 </html>"""
         return HTMLResponse(content=html_doc)
+
+
+@app.get("/dashboard/debug/links")
+def dashboard_debug_links(limit: int = 50):
+    safe_limit = max(1, min(500, int(limit)))
+    with _gambly_redirect_cache_lock:
+        cache_size = len(_gambly_redirect_cache)
+        target_index_size = len(_gambly_redirect_target_index)
+    return {
+        "status": "ok",
+        "limit": safe_limit,
+        "cache_size": cache_size,
+        "target_index_size": target_index_size,
+        "ttl_seconds": GAMBLY_REDIRECT_TTL_SECONDS,
+        "recent": _recent_gambly_link_events(limit=safe_limit),
+    }
 
 
 @app.get("/agents/status")
@@ -4550,6 +5215,12 @@ def dashboard_get_state():
         ):
             dashboard_state.source_csv_mtime = source_mtime
 
+        _ensure_dashboard_slip_links(
+            dashboard_state.parlays,
+            mode=dashboard_state.mode,
+            hits_profile=dashboard_state.hits_profile,
+        )
+
         snapshot = dashboard_state.snapshot()
 
     if not snapshot["parlays"]:
@@ -4581,6 +5252,106 @@ def dashboard_get_state():
         "latest_run_id": snapshot["latest_run_id"],
         "generated_at": snapshot["generated_at"],
         "parlays": snapshot["parlays"],
+    }
+
+
+@app.get("/dashboard/routing/books")
+def dashboard_routing_books(
+    country: str = "US",
+    region_state: str = "",
+    preferred_books: str | None = None,
+):
+    state_code = _standardize_region_state(region_state)
+    preferred = _parse_preferred_books_param(preferred_books)
+    books = filter_books_for_region(country=country, region_state=state_code, preferred_books=preferred)
+    return {
+        "status": "ok",
+        "country": str(country or "US").strip().upper(),
+        "region_state": state_code,
+        "books": [
+            {
+                "book": book,
+                "label": BOOK_LABELS.get(book, book.title()),
+                "one_click_capable": bool(BOOK_ONE_CLICK_CAPABILITY.get(book, False)),
+            }
+            for book in books
+        ],
+    }
+
+
+@app.get("/dashboard/routing/slip/{slip_id}")
+def dashboard_routing_for_slip(
+    slip_id: str,
+    request: Request,
+    country: str = "US",
+    region_state: str = "",
+    preferred_books: str | None = None,
+):
+    target_slip_id = str(slip_id or "").strip()
+    if not target_slip_id:
+        raise HTTPException(status_code=400, detail="slip_id is required.")
+
+    with dashboard_state._lock:
+        _ensure_dashboard_slip_links(
+            dashboard_state.parlays,
+            mode=dashboard_state.mode,
+            hits_profile=dashboard_state.hits_profile,
+        )
+        live_idx = -1
+        live_slip: dict | None = None
+        for idx, slip in enumerate(dashboard_state.parlays):
+            if not isinstance(slip, dict):
+                continue
+            if str(slip.get("slip_id") or "").strip() == target_slip_id:
+                live_idx = idx
+                live_slip = slip
+                break
+
+        if live_slip is not None:
+            return {
+                "status": "ok",
+                "source": "dashboard_state",
+                "mode": dashboard_state.mode,
+                "hits_profile": dashboard_state.hits_profile,
+                "run_id": dashboard_state.latest_run_id,
+                **_build_slip_routing_payload(
+                    slip=live_slip,
+                    slip_idx=live_idx,
+                    mode=dashboard_state.mode,
+                    hits_profile=dashboard_state.hits_profile,
+                    country=country,
+                    region_state=_standardize_region_state(region_state),
+                    base_origin=str(request.base_url).rstrip("/"),
+                    preferred_books=_parse_preferred_books_param(preferred_books),
+                ),
+            }
+
+    persisted = fetch_slip_by_id(target_slip_id)
+    if not persisted:
+        raise HTTPException(status_code=404, detail="Slip not found")
+
+    run_payload = persisted.get("run") if isinstance(persisted, dict) else {}
+    mode = _normalize_dashboard_mode(str((run_payload or {}).get("mode") or "balanced"))
+    hits_profile = _normalize_hits_profile(str((run_payload or {}).get("hits_profile") or "high-frequency"))
+    slip_index = int(persisted.get("slip_index") or 0)
+    slip = persisted.get("slip") if isinstance(persisted.get("slip"), dict) else {}
+
+    return {
+        "status": "ok",
+        "source": "portfolio_runs",
+        "mode": mode,
+        "hits_profile": hits_profile,
+        "run_id": str(persisted.get("run_id") or ""),
+        **_build_slip_routing_payload(
+            slip=slip,
+            slip_idx=slip_index,
+            mode=mode,
+            hits_profile=hits_profile,
+            country=country,
+            region_state=_standardize_region_state(region_state),
+            base_origin=str(request.base_url).rstrip("/"),
+            preferred_books=_parse_preferred_books_param(preferred_books),
+        ),
     }
 
 
@@ -4621,6 +5392,11 @@ def dashboard_generate_all(
             dashboard_state.lineup_locked_only = bool(lineup_locked_only)
             dashboard_state.allow_live = bool(allow_live)
             dashboard_state.source_csv_mtime = _dashboard_source_csv_mtime()
+            _ensure_dashboard_slip_links(
+                dashboard_state.parlays,
+                mode=dashboard_state.mode,
+                hits_profile=dashboard_state.hits_profile,
+            )
 
             return {
                 "status": "ok",
@@ -4697,6 +5473,11 @@ def dashboard_generate_one(
             dashboard_state.next_replace_index = (replaced_slot + 1) % 20
             dashboard_state.latest_run_id = board_one["run_id"]
             dashboard_state.generated_at = datetime.now(tz=timezone.utc).isoformat()
+            _ensure_dashboard_slip_links(
+                dashboard_state.parlays,
+                mode=dashboard_state.mode,
+                hits_profile=dashboard_state.hits_profile,
+            )
 
             return {
                 "status": "ok",
@@ -4760,6 +5541,11 @@ def dashboard_refresh_late_swap():
             dashboard_state.latest_run_id = board["run_id"]
             dashboard_state.generated_at = datetime.now(tz=timezone.utc).isoformat()
             dashboard_state.source_csv_mtime = _dashboard_source_csv_mtime()
+            _ensure_dashboard_slip_links(
+                dashboard_state.parlays,
+                mode=dashboard_state.mode,
+                hits_profile=dashboard_state.hits_profile,
+            )
 
             return {
                 "status": "ok",
@@ -4811,18 +5597,78 @@ def dashboard_player_pool(limit: int = 120, lineup_locked_only: bool = False, al
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+@app.get("/dashboard/rankings")
+def dashboard_rankings(
+    category: str = "hr",
+    subcategory: str = "overall",
+    limit: int = 80,
+    lineup_locked_only: bool = False,
+    allow_live: bool = False,
+):
+    try:
+        safe_limit = max(20, min(600, int(limit)))
+        category_key = _normalize_category_key(category)
+        subcategory_key = _normalize_subcategory_key(subcategory)
+
+        players = _build_dashboard_player_pool(lineup_locked_only=bool(lineup_locked_only), allow_live=bool(allow_live))
+        rank_adjustments = _dashboard_rank_adjustments()
+        categories = rank_adjustments.get("categories", {}) if isinstance(rank_adjustments, dict) else {}
+        subcategories = rank_adjustments.get("subcategories", {}) if isinstance(rank_adjustments, dict) else {}
+
+        category_weight = float(categories.get(category_key, 1.0)) if isinstance(categories, dict) else 1.0
+        subcategory_weight = float(subcategories.get(subcategory_key, 1.0)) if isinstance(subcategories, dict) else 1.0
+
+        field_by_category = {
+            "hr": "hr_score",
+            "hits": "hit_score",
+            "tb": "tb_score",
+            "rbi": "rbi_score",
+            "hrr": "hrr_score",
+            "value": "portfolio_value_score",
+            "matchup": "pitcher_vuln_score",
+            "recent": "recent_form_score",
+        }
+        score_field = field_by_category.get(category_key, "hr_score")
+
+        ranked: list[dict] = []
+        for player in players:
+            if not isinstance(player, dict):
+                continue
+            base_score = float(player.get(score_field) or 0.0)
+            adjusted_score = round(base_score * category_weight * subcategory_weight, 6)
+            row = dict(player)
+            row["rank_score"] = adjusted_score
+            ranked.append(row)
+
+        ranked.sort(key=lambda item: float(item.get("rank_score") or 0.0), reverse=True)
+
+        return {
+            "status": "ok",
+            "category": category_key,
+            "subcategory": subcategory_key,
+            "lineup_locked_only": bool(lineup_locked_only),
+            "allow_live": bool(allow_live),
+            "count": len(ranked),
+            "limit": safe_limit,
+            "rank_adjustments": rank_adjustments,
+            "players": ranked[:safe_limit],
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 @app.post("/dashboard/sportsbook/resolve-links")
 def dashboard_resolve_sportsbook_links(payload: dict):
     failure_stage = "request_received"
     requested_book = str(payload.get("book", "")).strip().lower()
-    # Backward-compatibility for stale clients while routing all direct books to Gambly.
-    book_aliases = {
-        "fanduel": "gambly",
-        "draftkings": "gambly",
-    }
-    book = book_aliases.get(requested_book, requested_book)
+    book = requested_book
     if book not in SUPPORTED_SPORTSBOOKS:
-        raise HTTPException(status_code=400, detail="book must be 'gambly' or 'actionnetwork'.")
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported book. Use gambly, actionnetwork, fanduel, draftkings, fanatics, espn_bet, caesars, or betmgm.",
+        )
 
     requested_target_sportsbook = str(
         payload.get("target_sportsbook")
@@ -4884,7 +5730,9 @@ def dashboard_resolve_sportsbook_links(payload: dict):
         failure_stage = "cache_lookup"
         cached_links, cached_team_links, cache_fresh, cache_age = _get_link_cache(provider_book)
         cache_age_seconds = round(cache_age, 3)
-        if cache_fresh and cached_links:
+        # Cache is populated from broad market pulls; for prop-accurate resolution,
+        # prefer live fetches when a specific prop market is requested.
+        if cache_fresh and cached_links and not prop_mode:
             links_by_player = cached_links
             if allow_event_fallback:
                 links_by_team = cached_team_links
@@ -4927,30 +5775,6 @@ def dashboard_resolve_sportsbook_links(payload: dict):
 
         # Multi-source fallback within odds data: broaden market pull in case
         # the requested key family is sparse/missing at the book.
-            backup_market_keys = [key for key in ALL_PLAYER_PROP_MARKET_KEYS if key not in set(market_keys)]
-            if backup_market_keys and not links_by_player:
-                failure_stage = "provider_backup"
-                logger.info(
-                    "sportsbook_resolver provider_call_started",
-                    extra={"book": provider_book, "stage": failure_stage, "markets": backup_market_keys},
-                )
-                backup_links = _fetch_book_player_links(
-                    book=provider_book,
-                    api_key=api_key,
-                    market_keys=backup_market_keys,
-                    diagnostics=provider_diagnostics,
-                )
-                logger.info(
-                    "sportsbook_resolver provider_call_finished",
-                    extra={"book": provider_book, "stage": failure_stage, "returned_links": len(backup_links)},
-                )
-                for player_key, link in backup_links.items():
-                    if player_key in links_by_player:
-                        continue
-                    links_by_player[player_key] = link
-                    direct_source_by_player[player_key] = "backup_market_source"
-                    direct_source_counts["backup_market_source"] += 1
-
             if not links_by_player:
                 failure_stage = "provider_event"
                 logger.info(
@@ -4986,7 +5810,9 @@ def dashboard_resolve_sportsbook_links(payload: dict):
     per_slip_gambly_links: list[str | None] = []
     per_slip_gambly_redirects: list[str | None] = []
     per_slip_texts: list[str] = []
-    allow_search_fallback = (not verified_only)
+    # Always allow non-gambly search fallback for unresolved legs so every player
+    # still has an actionable open path, even when provider coverage is partial.
+    allow_search_fallback = book != "gambly"
     resolved_count = 0
     total_legs = 0
     direct_links_count = 0
@@ -4999,6 +5825,7 @@ def dashboard_resolve_sportsbook_links(payload: dict):
     for slip in slips:
         selected_link: str | None = None
         leg_links: list[str | None] = []
+        slip_id = str(slip.get("slip_id") or "").strip() if isinstance(slip, dict) else ""
         slip_text = _compose_sportsbook_slip_text(
             slip=slip if isinstance(slip, dict) else {},
             idx=len(per_slip_links),
@@ -5013,14 +5840,21 @@ def dashboard_resolve_sportsbook_links(payload: dict):
                         continue
                     total_legs += 1
                     player_name = str(leg.get("player_name", "")).strip()
-                    player_key = _norm_player_name(player_name)
-                    if not player_key:
+                    player_lookup_keys = _player_lookup_keys(player_name)
+                    if not player_lookup_keys:
                         leg_links.append(None)
                         continue
-                    link = links_by_player.get(player_key)
+                    link = None
+                    source_name = ""
+                    for candidate_key in player_lookup_keys:
+                        candidate_link = links_by_player.get(candidate_key)
+                        if not candidate_link:
+                            continue
+                        link = candidate_link
+                        source_name = direct_source_by_player.get(candidate_key, "")
+                        break
                     if link:
                         direct_links_count += 1
-                        source_name = direct_source_by_player.get(player_key, "")
                         if source_name == "requested_market_source":
                             requested_market_links_count += 1
                         elif source_name == "backup_market_source":
@@ -5052,7 +5886,9 @@ def dashboard_resolve_sportsbook_links(payload: dict):
         per_slip_texts.append(slip_text)
         slip_gambly_link = _build_gambly_slip_link(slip_text=slip_text, target_sportsbook=target_sportsbook)
         per_slip_gambly_links.append(slip_gambly_link)
-        per_slip_gambly_redirects.append(_cache_gambly_redirect(slip_gambly_link))
+        per_slip_gambly_redirects.append(
+            _cache_gambly_redirect(slip_gambly_link, slip_id=slip_id or None, source="resolve_links_slip")
+        )
 
     if verified_only:
         if total_legs > 0 and direct_links_count >= total_legs:
@@ -5113,7 +5949,7 @@ def dashboard_resolve_sportsbook_links(payload: dict):
 
     bundle_text = "\n\n".join([text for text in per_slip_texts if str(text).strip()])
     gambly_link = _build_gambly_slip_link(slip_text=bundle_text, target_sportsbook=target_sportsbook)
-    gambly_redirect = _cache_gambly_redirect(gambly_link)
+    gambly_redirect = _cache_gambly_redirect(gambly_link, source="resolve_links_bundle")
 
     return {
         "status": status,
