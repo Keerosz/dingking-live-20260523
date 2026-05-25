@@ -3868,15 +3868,13 @@ DASHBOARD_HTML = """
                     ? resolved.slip_links[0].filter((x) => typeof x === 'string' && x.trim())
                     : [];
                 if (strictRequested && (strictStatus === 'verified_none' || strictLinks.length === 0)) {
-                    if (!isMobileDevice()) {
-                        const fallbackResolved = await resolveLinks(false);
-                        const fallbackLinks = Array.isArray(fallbackResolved?.slip_links?.[0])
-                            ? fallbackResolved.slip_links[0].filter((x) => typeof x === 'string' && x.trim())
-                            : [];
-                        if (fallbackLinks.length) {
-                            resolved = fallbackResolved;
-                            statusText.textContent = 'No exact player+prop links found. Switched to event links so your opens still work.';
-                        }
+                    const fallbackResolved = await resolveLinks(false);
+                    const fallbackLinks = Array.isArray(fallbackResolved?.slip_links?.[0])
+                        ? fallbackResolved.slip_links[0].filter((x) => typeof x === 'string' && x.trim())
+                        : [];
+                    if (fallbackLinks.length) {
+                        resolved = fallbackResolved;
+                        statusText.textContent = 'No exact player+prop links found. Switched to event links so your opens still work.';
                     }
                 }
             } catch {
