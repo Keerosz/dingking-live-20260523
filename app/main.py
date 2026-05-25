@@ -5871,6 +5871,7 @@ def dashboard_resolve_sportsbook_links(payload: dict):
     backup_market_links_count = 0
     event_market_links_count = 0
     event_links_count = 0
+    home_links_count = 0
     fallback_links_count = 0
 
     for slip in slips:
@@ -5912,7 +5913,7 @@ def dashboard_resolve_sportsbook_links(payload: dict):
                             backup_market_links_count += 1
                         elif source_name == "event_market_source":
                             event_market_links_count += 1
-                    elif not verified_only and allow_event_fallback:
+                    elif allow_event_fallback:
                         team_candidates = _team_lookup_candidates(str(leg.get("team") or ""))
                         for candidate in team_candidates:
                             event_link = links_by_team.get(candidate)
@@ -5920,6 +5921,11 @@ def dashboard_resolve_sportsbook_links(payload: dict):
                                 link = event_link
                                 event_links_count += 1
                                 break
+                    if not link and allow_event_fallback:
+                        home_link = str(BOOK_HOME_URLS.get(provider_book or book, "")).strip()
+                        if home_link:
+                            link = home_link
+                            home_links_count += 1
                     if not link and allow_search_fallback and book != "gambly":
                         failure_stage = "search_fallback"
                         search_book = provider_book or target_sportsbook or book
@@ -5944,16 +5950,18 @@ def dashboard_resolve_sportsbook_links(payload: dict):
     if verified_only:
         if total_legs > 0 and direct_links_count >= total_legs:
             status = "verified_all"
-        elif fallback_links_count > 0:
-            status = "fallback_search"
         elif direct_links_count > 0:
             status = "verified_partial"
+        elif event_links_count > 0 or home_links_count > 0:
+            status = "event_only"
+        elif fallback_links_count > 0:
+            status = "fallback_search"
         else:
             status = "verified_none"
     else:
         if direct_links_count > 0:
             status = "ok"
-        elif event_links_count > 0:
+        elif event_links_count > 0 or home_links_count > 0:
             status = "event_only"
         elif using_api:
             status = "fallback_only"
@@ -6025,6 +6033,7 @@ def dashboard_resolve_sportsbook_links(payload: dict):
         "backup_market_links": backup_market_links_count,
         "event_market_links": event_market_links_count,
         "event_links": event_links_count,
+        "home_links": home_links_count,
         "fallback_links": fallback_links_count,
         "links": per_slip_links,
         "slip_links": per_slip_leg_links,
